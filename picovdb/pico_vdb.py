@@ -247,40 +247,61 @@ class PicoVectorDB:
 
     def query(
         self,
-        query_vec: np.ndarray,
+        query_vecs: np.ndarray,
         top_k: int = 10,
         better_than: Optional[float] = None,
         where: Optional[Callable[[dict[str, Any]], bool]] = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[list[dict[str, Any]]]:
+        # prepare empty batch result if no vectors
+        raw = np.asarray(query_vecs, dtype=Float)
+        is_single = raw.ndim == 1
+        vecs = raw[None, :] if is_single else raw
+        num_q = vecs.shape[0]
         if not self._id2idx:
-            return []
-        q = _normalize(np.asarray(query_vec, dtype=Float))
+            return [[] for _ in range(num_q)]
+        # normalize each query vector
+        vecs = np.stack([_normalize(v) for v in vecs], axis=0)
+        # compute scores and indices batch-wise
         if self._faiss is not None:
             self._faiss.hnsw.efSearch = HNSW_EFS
-            scores, idxs = self._faiss.search(q[None, :], top_k)
-            idxs, scores = idxs[0], scores[0]
+            scores_batch, idxs_batch = self._faiss.search(vecs, top_k)
         else:
-            scores = self._vectors @ q
-            k = min(top_k, len(scores))
-            idxs = np.argpartition(scores, -k)[-k:]
-            ord_desc = np.argsort(scores[idxs])[::-1]
-            idxs, scores = idxs[ord_desc], scores[idxs][ord_desc]
-        results = []
-        for idx, score in zip(idxs, scores):
-            if idx < 0 or idx >= len(self._ids):
-                continue
-            doc_id = self._ids[idx]
-            if doc_id is None:
-                continue
-            if better_than is not None and score < better_than:
-                continue
-            meta = self._docs[idx] or {f_ID: doc_id}
-            if where and not where(meta):
-                continue
-            results.append({**meta, f_METRICS: float(score)})
-            if len(results) == top_k:
-                break
-        return results
+            raw_scores = self._vectors @ vecs.T  # shape (N, num_q)
+            idxs_list: list[np.ndarray] = []
+            scores_list: list[np.ndarray] = []
+            for qi in range(num_q):
+                scores = raw_scores[:, qi]
+                k = min(top_k, len(scores))
+                idxs = np.argpartition(scores, -k)[-k:]
+                ord_desc = np.argsort(scores[idxs])[::-1]
+                idxs_sorted = idxs[ord_desc]
+                scores_sorted = scores[idxs_sorted]
+                idxs_list.append(idxs_sorted)
+                scores_list.append(scores_sorted)
+            idxs_batch = np.stack(idxs_list, axis=0)
+            scores_batch = np.stack(scores_list, axis=0)
+        # build results for each query
+        results_batch: list[list[dict[str, Any]]] = []
+        for qi in range(num_q):
+            idxs = idxs_batch[qi]
+            scores = scores_batch[qi]
+            results: list[dict[str, Any]] = []
+            for idx, score in zip(idxs, scores):
+                if idx < 0 or idx >= len(self._ids):
+                    continue
+                doc_id = self._ids[idx]
+                if doc_id is None:
+                    continue
+                if better_than is not None and score < better_than:
+                    continue
+                meta = self._docs[idx] or {f_ID: doc_id}
+                if where and not where(meta):
+                    continue
+                results.append({**meta, f_METRICS: float(score)})
+                if len(results) == top_k:
+                    break
+            results_batch.append(results)
+        return results_batch[0] if is_single else results_batch
 
     # ------------------------------------------------------------------
     # Internals
