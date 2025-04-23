@@ -8,6 +8,9 @@ import numpy as np
 
 
 Float = np.float32
+HNSW_M = 32  # number of connections each vertex will have
+HNSW_EFC = 40  # depth of layers explored during index construction
+HNSW_EFS = 32  # depth of layers explored during search
 f_ID = "_id_"
 f_VECTOR = "_vector_"
 f_METRICS = "_metrics_"
@@ -63,6 +66,7 @@ class PicoVectorDB:
         metric: Literal["cosine"] = "cosine",
         storage_file: str = "picovdb",
         use_memmap: bool = False,
+        no_faiss: bool = False,
     ) -> None:
         self.dim = embedding_dim
         self.metric = metric
@@ -78,7 +82,12 @@ class PicoVectorDB:
         self._additional: dict[str, Any] = {}
 
         # faiss index ---------------------------------------------------------
-        self._faiss = faiss.IndexFlatIP(self.dim) if _HAS_FAISS else None
+        # self._faiss = faiss.IndexFlatIP(self.dim) if _HAS_FAISS else None
+        if _HAS_FAISS and not no_faiss:
+            self._faiss = faiss.IndexHNSWFlat(self.dim, HNSW_M, faiss.METRIC_INNER_PRODUCT)
+            self._faiss.hnsw.efConstruction = HNSW_EFC
+        else:
+            self._faiss = None
 
         self._load_or_init()
 
@@ -118,8 +127,11 @@ class PicoVectorDB:
                     self._free.append(i)
                 else:
                     self._id2idx[_id] = i
-            if _HAS_FAISS:
-                self._rebuild_faiss()
+            if self._faiss is not None:
+                if os.path.exists(vecs_file + ".faiss"):
+                    self._faiss = faiss.read_index(vecs_file + ".faiss")
+                else:
+                    self._rebuild_faiss()
             logger.info("Loaded %d active / %d total vectors", len(self._id2idx), count)
         else:
             self._ids, self._docs = [], []
@@ -138,6 +150,8 @@ class PicoVectorDB:
             json.dump(self._ids, f, ensure_ascii=False)
         # vectors -------------------------------------------------------------
         np.save(vecs_file, self._vectors)
+        if self._faiss:
+            faiss.write_index(self._faiss, vecs_file + ".faiss")
         # full metadata -------------------------------------------------------
         meta_json = {
             "embedding_dim": self.dim,
@@ -186,7 +200,7 @@ class PicoVectorDB:
             )
             self._ids.extend(new_ids)
             self._docs.extend(new_docs)
-        if _HAS_FAISS:
+        if self._faiss is not None:
             self._rebuild_faiss()
         return report
 
@@ -212,7 +226,7 @@ class PicoVectorDB:
                 self._vectors[idx].fill(0)
                 self._free.append(idx)
                 removed.append(_id)
-        if removed and _HAS_FAISS:
+        if removed and self._faiss is not None:
             self._rebuild_faiss()
         return removed
 
@@ -223,7 +237,7 @@ class PicoVectorDB:
         self._docs = [self._docs[i] for i in keep]
         self._free.clear()
         self._id2idx = {_id: i for i, _id in enumerate(self._ids)}
-        if _HAS_FAISS:
+        if self._faiss is not None:
             self._rebuild_faiss()
         logger.info("Compacted – %d vectors", len(self))
 
@@ -242,6 +256,7 @@ class PicoVectorDB:
             return []
         q = _normalize(np.asarray(query_vec, dtype=Float))
         if self._faiss is not None:
+            self._faiss.hnsw.efSearch = HNSW_EFS
             scores, idxs = self._faiss.search(q[None, :], top_k)
             idxs, scores = idxs[0], scores[0]
         else:
