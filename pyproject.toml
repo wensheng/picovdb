@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "picovdb"
+version = "0.1.0"
+description = ""
+authors = ["Wensheng Wang <wenshengwang@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+numpy = "*"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
