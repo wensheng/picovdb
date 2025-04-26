@@ -144,7 +144,6 @@ class PicoVectorDB:
             _vecs_path(self._path),
             _meta_path(self._path),
         )
-        logger.info("Saving DB …")
         # ids quick‑load file --------------------------------------------------
         with open(ids_file, "w", encoding="utf‑8") as f:
             json.dump(self._ids, f, ensure_ascii=False)
