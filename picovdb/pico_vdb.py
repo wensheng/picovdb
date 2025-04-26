@@ -326,3 +326,9 @@ class PicoVectorDB:
             if idx is not None:
                 out.append(self._docs[idx] or {f_ID: _id})
         return out
+
+    def get_by_id(self, sid: str) -> dict[str, Any]:
+        idx = self._id2idx.get(sid)
+        if idx is not None:
+            return self._docs[idx] or {f_ID: sid}
+        return None
