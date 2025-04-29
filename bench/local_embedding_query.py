@@ -22,3 +22,7 @@ emb = model.encode(txt)
 
 q = db.query(emb, top_k=5, better_than=0.1)
 print('query results:', q)
+
+all_docs = db.get_all()
+print(len(all_docs))
+print(all_docs[0])
