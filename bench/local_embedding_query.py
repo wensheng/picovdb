@@ -1,4 +1,5 @@
 from sentence_transformers import SentenceTransformer, util
+import set_path
 from picovdb import PicoVectorDB
 
 CHUNK_SIZE = 256

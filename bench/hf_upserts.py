@@ -6,26 +6,25 @@ import set_path
 from picovdb import PicoVectorDB
 
 DIMENSION = 512
-BATCH_SIZE = 500
 model = SentenceTransformer("mixedbread-ai/mxbai-embed-large-v1", truncate_dim=DIMENSION)
-rag_full = load_dataset("neural-bridge/rag-full-20000")
-rows = rag_full["train"]["clear_prompt"]
+rag_data = load_dataset("neural-bridge/rag-dataset-1200")
+
+embeddings = model.encode(
+    rag_data['train']['context'],
+    show_progress_bar=True,
+    convert_to_tensor=True
+)
+rows = rag_data["train"].to_list()
+docs = [{
+    "_id_": str(i),
+    "_vector_": embeddings[i].cpu().numpy(),
+    "context": row['context'],
+    "question": row['question'],
+    "answer": row['answer'],
+} for i, row in enumerate(rows)]
+
 hf_data_vdb = PicoVectorDB(embedding_dim=DIMENSION, storage_file="hfdata")
-
-
-for i in range(len(rows) // BATCH_SIZE + 1):
-    start = i * BATCH_SIZE
-    end = (i + 1) * BATCH_SIZE
-    if end > len(rows):
-        end = len(rows)
-    print(f"Processing rows {start} to {end}")
-    embeddings = model.encode(rows[start:end], show_progress_bar=True, convert_to_tensor=True)
-    docs = [{
-        "_id_": str(j),
-        "_vector_": embeddings[j - start].cpu().numpy(),
-        "text": rows[j],
-    } for j in range(start, end)]
-    hf_data_vdb.upsert(docs)
+hf_data_vdb.upsert(docs)
 hf_data_vdb.save()
 
 # query = "A man is eating a piece of bread"

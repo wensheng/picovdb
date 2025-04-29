@@ -3,3 +3,4 @@ poetry
 pytest
 ruff
 datasets
+faiss-cpu
