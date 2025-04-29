@@ -331,3 +331,7 @@ class PicoVectorDB:
         if idx is not None:
             return self._docs[idx] or {f_ID: sid}
         return None
+
+    def get_all(self) -> list[dict[str, Any]]:
+        return [doc | {f_ID: _id} for _id, doc in zip(self._ids, self._docs)]
+

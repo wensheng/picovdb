@@ -2,3 +2,4 @@ sentence-transformers
 poetry
 pytest
 ruff
+datasets
