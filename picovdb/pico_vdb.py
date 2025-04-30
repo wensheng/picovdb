@@ -252,26 +252,27 @@ class PicoVectorDB:
         if not self._id2idx:
             return [[] for _ in range(num_q)]
         # normalize each query vector
-        vecs = np.stack([_normalize(v) for v in vecs], axis=0)
+        # batch normalize without Python loop
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        vecs = (vecs / norms).astype(Float, copy=False)
         # compute scores and indices batch-wise
         if self._faiss is not None:
             self._faiss.hnsw.efSearch = HNSW_EFS
             scores_batch, idxs_batch = self._faiss.search(vecs, top_k)
         else:
-            raw_scores = self._vectors @ vecs.T  # shape (N, num_q)
-            idxs_list: list[np.ndarray] = []
-            scores_list: list[np.ndarray] = []
-            for qi in range(num_q):
-                scores = raw_scores[:, qi]
-                k = min(top_k, len(scores))
-                idxs = np.argpartition(scores, -k)[-k:]
-                ord_desc = np.argsort(scores[idxs])[::-1]
-                idxs_sorted = idxs[ord_desc]
-                scores_sorted = scores[idxs_sorted]
-                idxs_list.append(idxs_sorted)
-                scores_list.append(scores_sorted)
-            idxs_batch = np.stack(idxs_list, axis=0)
-            scores_batch = np.stack(scores_list, axis=0)
+            # vectorized top-k selection
+            scores = self._vectors @ vecs.T  # shape (N, num_q)
+            k_eff = min(top_k, self._vectors.shape[0])
+            # partial top-k indices per query
+            idxs_part = np.argpartition(scores, -k_eff, axis=0)[-k_eff:, :]  # shape (k_eff, num_q)
+            # gather scores for those indices
+            scores_part = scores[idxs_part, np.arange(num_q)[None, :]]  # shape (k_eff, num_q)
+            # sort within top-k
+            order = np.argsort(-scores_part, axis=0)  # shape (k_eff, num_q)
+            # build final batch indices and scores
+            idxs_batch = np.take_along_axis(idxs_part, order, axis=0).T  # shape (num_q, k_eff)
+            scores_batch = np.take_along_axis(scores_part, order, axis=0).T
         # build results for each query
         results_batch: list[list[dict[str, Any]]] = []
         for qi in range(num_q):
