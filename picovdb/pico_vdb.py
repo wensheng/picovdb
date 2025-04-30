@@ -1,3 +1,6 @@
+"""
+PicoVectorDB: A simple and fast vector database
+"""
 import os
 import json
 import hashlib
@@ -5,15 +8,22 @@ import logging
 from typing import Any, Callable, Literal, Optional, Union
 
 import numpy as np
+# optional FAISS --------------------------------------------------------------
+try:
+    import faiss  # type: ignore
+
+    _HAS_FAISS = True
+except ImportError:  # pragma: no cover
+    _HAS_FAISS = False
 
 
 Float = np.float32
 HNSW_M = 32  # number of connections each vertex will have
 HNSW_EFC = 40  # depth of layers explored during index construction
 HNSW_EFS = 32  # depth of layers explored during search
-f_ID = "_id_"
-f_VECTOR = "_vector_"
-f_METRICS = "_metrics_"
+K_ID = "_id_"
+K_VECTOR = "_vector_"
+K_METRICS = "_metrics_"
 
 logger = logging.getLogger("picovdb")
 logging.basicConfig(level=logging.INFO)
@@ -39,14 +49,6 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     if n == 0:
         return v.astype(Float, copy=False)
     return (v / n).astype(Float, copy=False)
-
-# optional FAISS --------------------------------------------------------------
-try:
-    import faiss  # type: ignore
-
-    _HAS_FAISS = True
-except ImportError:  # pragma: no cover
-    _HAS_FAISS = False
 
 # -----------------------------------------------------------------------------
 # Main class
@@ -139,6 +141,9 @@ class PicoVectorDB:
             logger.info("No persisted data – fresh DB")
 
     def save(self) -> None:
+        """
+        Persist the current state of the database, overwrite existing files.
+        """
         ids_file, vecs_file, meta_file = (
             _ids_path(self._path),
             _vecs_path(self._path),
@@ -165,13 +170,13 @@ class PicoVectorDB:
         """---------------------------------------------------------------------
         # Mutators
         """
-        report = {"update": [], "insert": []}
+        report : dict[str, list[str]] = {"update": [], "insert": []}
         new_vecs, new_ids, new_docs = [], [], []
         for item in items:
-            vec = _normalize(np.asarray(item[f_VECTOR], dtype=Float))
-            meta = {k: v for k, v in item.items() if k != f_VECTOR}
-            item_id = meta.get(f_ID) or _hash_vec(vec)
-            meta[f_ID] = item_id
+            vec = _normalize(np.asarray(item[K_VECTOR], dtype=Float))
+            meta = {k: v for k, v in item.items() if k != K_VECTOR}
+            item_id = meta.get(K_ID) or _hash_vec(vec)
+            meta[K_ID] = item_id
             if item_id in self._id2idx:
                 idx = self._id2idx[item_id]
                 self._vectors[idx] = vec
@@ -194,7 +199,7 @@ class PicoVectorDB:
         if new_vecs:
             stacked = np.vstack(new_vecs)
             self._vectors = (
-                stacked if not len(self._ids) else np.vstack([self._vectors, stacked])
+                stacked if not self._ids else np.vstack([self._vectors, stacked])
             )
             self._ids.extend(new_ids)
             self._docs.extend(new_docs)
@@ -215,11 +220,12 @@ class PicoVectorDB:
         return self._additional
 
     def delete(self, ids: list[str]) -> list[str]:
+        """ Delete vectors by IDs, return deleted IDs."""
         removed = []
         for _id in ids:
             idx = self._id2idx.pop(_id, None)
             if idx is not None:
-                self._ids[idx] = None
+                self._ids[idx] = ''
                 self._docs[idx] = None
                 self._vectors[idx].fill(0)
                 self._free.append(idx)
@@ -280,10 +286,10 @@ class PicoVectorDB:
                     continue
                 if better_than is not None and score < better_than:
                     continue
-                meta = self._docs[idx] or {f_ID: doc_id}
+                meta = self._docs[idx] or {K_ID: doc_id}
                 if where and not where(meta):
                     continue
-                results.append({**meta, f_METRICS: float(score)})
+                results.append({**meta, K_METRICS: float(score)})
                 if len(results) == top_k:
                     break
             results_batch.append(results)
@@ -300,30 +306,31 @@ class PicoVectorDB:
         if self._vectors.size:
             self._faiss.add(self._vectors)
 
-    # ------------------------------------------------------------------
     def __len__(self) -> int:
         return len(self._id2idx)
 
-    # convenience ------------------------------------------------------------
     def get(self, ids: list[str]) -> list[dict[str, Any]]:
+        """ Get vectors by IDs, return list of dicts with metadata and vector. """
         out = []
         for _id in ids:
             idx = self._id2idx.get(_id)
             if idx is not None:
-                out.append(self._docs[idx] or {f_ID: _id})
+                out.append(self._docs[idx] or {K_ID: _id})
         return out
 
     def get_by_id(self, sid: str) -> Optional[dict[str, Any]]:
+        """ Get vector by ID, return dict with metadata and vector. """
         idx = self._id2idx.get(sid)
         if idx is not None:
-            return self._docs[idx] or {f_ID: sid}
+            return self._docs[idx] or {K_ID: sid}
         return None
 
     def get_all(self) -> list[dict[str, Any]]:
+        """ Get all vectors, return list of dicts with metadata and vector. """
         docs = []
         for _id, doc in zip(self._ids, self._docs):
             if doc is not None:
-                docs.append(doc | {f_ID: _id})
+                docs.append(doc | {K_ID: _id})
             else:
-                docs.append({f_ID: _id})
+                docs.append({K_ID: _id})
         return docs

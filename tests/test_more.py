@@ -13,9 +13,9 @@ from picovdb.pico_vdb import (
     _ids_path,
     _meta_path,
     _vecs_path,
-    f_VECTOR,
-    f_ID,
-    f_METRICS,
+    K_VECTOR,
+    K_ID,
+    K_METRICS,
 )
 
 
@@ -59,8 +59,8 @@ def make_simple_db(tmp_path, use_memmap=False):
 def test_upsert_and_len_and_get_by_id(tmp_path):
     db = make_simple_db(tmp_path)
     data = [
-        {f_VECTOR: np.array([1.0, 0.0, 0.0], dtype=np.float32), f_ID: "a", "x": 1},
-        {f_VECTOR: np.array([0.0, 1.0, 0.0], dtype=np.float32), f_ID: "b", "x": 2},
+        {K_VECTOR: np.array([1.0, 0.0, 0.0], dtype=np.float32), K_ID: "a", "x": 1},
+        {K_VECTOR: np.array([0.0, 1.0, 0.0], dtype=np.float32), K_ID: "b", "x": 2},
     ]
     report = db.upsert(data)
     # both inserted
@@ -70,7 +70,7 @@ def test_upsert_and_len_and_get_by_id(tmp_path):
 
     # get_by_id returns correct metadata
     rec = db.get_by_id("a")
-    assert rec["x"] == 1 and rec[f_ID] == "a"
+    assert rec["x"] == 1 and rec[K_ID] == "a"
     rec = db.get_by_id("missing")
     assert rec is None
 
@@ -83,8 +83,8 @@ def test_upsert_and_len_and_get_by_id(tmp_path):
 def test_get_all_and_store_additional_and_persistence(tmp_path):
     db = make_simple_db(tmp_path)
     items = [
-        {f_VECTOR: np.random.rand(3).astype(np.float32), f_ID: "1"},
-        {f_VECTOR: np.random.rand(3).astype(np.float32), f_ID: "2"},
+        {K_VECTOR: np.random.rand(3).astype(np.float32), K_ID: "1"},
+        {K_VECTOR: np.random.rand(3).astype(np.float32), K_ID: "2"},
     ]
     db.upsert(items)
     db.store_additional_data(foo="bar", num=123)
@@ -96,7 +96,7 @@ def test_get_all_and_store_additional_and_persistence(tmp_path):
     assert db2.get_additional_data() == {"foo": "bar", "num": 123}
 
     all_docs = db2.get_all()
-    ids = [d[f_ID] for d in all_docs]
+    ids = [d[K_ID] for d in all_docs]
     assert set(ids) == {"1", "2"}
 
 
@@ -104,10 +104,10 @@ def test_update_on_reupsert(tmp_path):
     db = make_simple_db(tmp_path)
     # insert one
     vec = np.array([1.0, 1.0, 0.0], dtype=np.float32)
-    db.upsert([{f_VECTOR: vec, f_ID: "u"}])
+    db.upsert([{K_VECTOR: vec, K_ID: "u"}])
     # change metadata and vector
     new_vec = np.array([0.0, 1.0, 1.0], dtype=np.float32)
-    report = db.upsert([{f_VECTOR: new_vec, f_ID: "u", "tag": "updated"}])
+    report = db.upsert([{K_VECTOR: new_vec, K_ID: "u", "tag": "updated"}])
     assert report["insert"] == []
     assert report["update"] == ["u"]
     rec = db.get_by_id("u")
@@ -118,17 +118,17 @@ def test_delete_and_reuse_free_slot(tmp_path):
     db = make_simple_db(tmp_path)
     # insert three
     for i in range(3):
-        db.upsert([{f_VECTOR: np.eye(3, dtype=np.float32)[i], f_ID: str(i)}])
+        db.upsert([{K_VECTOR: np.eye(3, dtype=np.float32)[i], K_ID: str(i)}])
     assert len(db) == 3
     # delete one
     removed = db.delete(["1"])
     assert removed == ["1"]
     assert len(db) == 2
     # insert new, should reuse slot
-    db.upsert([{f_VECTOR: np.array([1,1,1], dtype=np.float32), f_ID: "new"}])
+    db.upsert([{K_VECTOR: np.array([1,1,1], dtype=np.float32), K_ID: "new"}])
     assert len(db) == 3
     # ensure "new" in get_all
-    ids = [d[f_ID] for d in db.get_all()]
+    ids = [d[K_ID] for d in db.get_all()]
     assert "new" in ids
 
 
@@ -140,29 +140,29 @@ def test_query_single_and_batch(tmp_path):
         np.array([0, 1, 0], dtype=np.float32),
         np.array([0, 0, 1], dtype=np.float32),
     ]
-    items = [{f_VECTOR: v, f_ID: str(i)} for i, v in enumerate(vs)]
+    items = [{K_VECTOR: v, K_ID: str(i)} for i, v in enumerate(vs)]
     db.upsert(items)
 
     # single query
     q = np.array([0.9, 0.1, 0], dtype=np.float32)
     res = db.query(q, top_k=2)
     # best match is 0, then 1
-    assert [r[f_ID] for r in res] == ["0", "1"]
+    assert [r[K_ID] for r in res] == ["0", "1"]
 
     # batch query
     batch_q = np.stack([vs[2], vs[1]], axis=0)
     batch_res = db.query(batch_q, top_k=1)
     assert isinstance(batch_res, list) and len(batch_res) == 2
-    assert batch_res[0][0][f_ID] == "2"
-    assert batch_res[1][0][f_ID] == "1"
+    assert batch_res[0][0][K_ID] == "2"
+    assert batch_res[1][0][K_ID] == "1"
 
 
 def test_query_with_filters(tmp_path):
     db = make_simple_db(tmp_path)
     # insert two
     items = [
-        {f_VECTOR: np.array([1, 0, 0], dtype=np.float32), f_ID: "a", "keep": True},
-        {f_VECTOR: np.array([1, 0, 0], dtype=np.float32), f_ID: "b", "keep": False},
+        {K_VECTOR: np.array([1, 0, 0], dtype=np.float32), K_ID: "a", "keep": True},
+        {K_VECTOR: np.array([1, 0, 0], dtype=np.float32), K_ID: "b", "keep": False},
     ]
     db.upsert(items)
     q = np.array([1, 0, 0], dtype=np.float32)
@@ -172,13 +172,13 @@ def test_query_with_filters(tmp_path):
 
     # where filter
     res2 = db.query(q, top_k=2, where=lambda doc: doc.get("keep", False))
-    assert [d[f_ID] for d in res2] == ["a"]
+    assert [d[K_ID] for d in res2] == ["a"]
 
 
 def test_persistence_with_memmap(tmp_path):
     # test using memmap storage
     db = make_simple_db(tmp_path, use_memmap=True)
-    items = [{f_VECTOR: np.random.rand(3).astype(np.float32)} for _ in range(5)]
+    items = [{K_VECTOR: np.random.rand(3).astype(np.float32)} for _ in range(5)]
     report = db.upsert(items)
     assert len(report["insert"]) == 5
     db.save()
