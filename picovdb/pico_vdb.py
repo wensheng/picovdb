@@ -2,7 +2,7 @@ import os
 import json
 import hashlib
 import logging
-from typing import Callable, Optional, Literal, Any
+from typing import Any, Callable, Literal, Optional, Union
 
 import numpy as np
 
@@ -75,7 +75,7 @@ class PicoVectorDB:
 
         # in‑memory parallel lists ------------------------------------------------
         self._vectors: np.ndarray  # (N, dim) float32 & L2‑normalised
-        self._ids: list[Optional[str]]
+        self._ids: list[str]
         self._docs: list[Optional[dict[str, Any]]]
         self._free: list[int] = []
         self._id2idx: dict[str, int] = {}
@@ -161,11 +161,10 @@ class PicoVectorDB:
             json.dump(meta_json, f, ensure_ascii=False)
         logger.info("Saved %d vectors", len(self._ids))
 
-    # ---------------------------------------------------------------------
-    # Mutators
-    # ---------------------------------------------------------------------
-
     def upsert(self, items: list[dict[str, Any]]) -> dict[str, list[str]]:
+        """---------------------------------------------------------------------
+        # Mutators
+        """
         report = {"update": [], "insert": []}
         new_vecs, new_ids, new_docs = [], [], []
         for item in items:
@@ -229,28 +228,16 @@ class PicoVectorDB:
             self._rebuild_faiss()
         return removed
 
-    def compact(self) -> None:
-        keep = [i for i, _id in enumerate(self._ids) if _id is not None]
-        self._vectors = self._vectors[keep].copy()
-        self._ids = [self._ids[i] for i in keep]
-        self._docs = [self._docs[i] for i in keep]
-        self._free.clear()
-        self._id2idx = {_id: i for i, _id in enumerate(self._ids)}
-        if self._faiss is not None:
-            self._rebuild_faiss()
-        logger.info("Compacted – %d vectors", len(self))
-
-    # ---------------------------------------------------------------------
-    # Query
-    # ---------------------------------------------------------------------
-
     def query(
         self,
         query_vecs: np.ndarray,
         top_k: int = 10,
         better_than: Optional[float] = None,
         where: Optional[Callable[[dict[str, Any]], bool]] = None,
-    ) -> list[list[dict[str, Any]]]:
+    ) -> Union[list[list[dict[str, Any]]], list[dict[str, Any]]]:
+        """---------------------------------------------------------------------
+        # Query
+        """
         # prepare empty batch result if no vectors
         raw = np.asarray(query_vecs, dtype=Float)
         is_single = raw.ndim == 1
@@ -326,12 +313,17 @@ class PicoVectorDB:
                 out.append(self._docs[idx] or {f_ID: _id})
         return out
 
-    def get_by_id(self, sid: str) -> dict[str, Any]:
+    def get_by_id(self, sid: str) -> Optional[dict[str, Any]]:
         idx = self._id2idx.get(sid)
         if idx is not None:
             return self._docs[idx] or {f_ID: sid}
         return None
 
     def get_all(self) -> list[dict[str, Any]]:
-        return [doc | {f_ID: _id} for _id, doc in zip(self._ids, self._docs)]
-
+        docs = []
+        for _id, doc in zip(self._ids, self._docs):
+            if doc is not None:
+                docs.append(doc | {f_ID: _id})
+            else:
+                docs.append({f_ID: _id})
+        return docs
