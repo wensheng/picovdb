@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 
-import pytest
 import numpy as np
 
 from picovdb import PicoVectorDB, f_METRICS, f_ID, f_VECTOR
@@ -18,7 +17,7 @@ def test_init():
     print("Load", time() - start)
 
     fake_embeds = np.random.rand(data_len, fake_dim)
-    fakes_data = [{f_VECTOR: fake_embeds[i], f_ID: i} for i in range(data_len)]
+    fakes_data = [{f_VECTOR: fake_embeds[i], f_ID: str(i)} for i in range(data_len)]
     query_data = fake_embeds[data_len // 2]
     start = time()
     r = a.upsert(fakes_data)
@@ -29,7 +28,7 @@ def test_init():
 
     start = time()
     r = a.query(query_data, 10, better_than=0.01)
-    assert r[0][f_ID] == data_len // 2
+    assert r[0][f_ID] == str(data_len // 2)
     print(r)
     assert len(r) <= 10
     for d in r:
