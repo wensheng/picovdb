@@ -140,6 +140,9 @@ class PicoVectorDB:
             self._vectors = np.empty((0, self.dim), dtype=Float)
             logger.info("No persisted data – fresh DB")
 
+    def size(self) -> int:
+        return len(self._ids)
+
     def save(self) -> None:
         """
         Persist the current state of the database, overwrite existing files.
