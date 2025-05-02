@@ -48,7 +48,9 @@ def _hash_vec(v: np.ndarray) -> str:
 def _normalize(v: np.ndarray) -> np.ndarray:
     n = np.linalg.norm(v)
     if n == 0:
-        return v.astype(Float, copy=False)
+        # Replace 0-vector with small random noise
+        noise = np.random.normal(0, 0.01, size=v.shape).astype(Float)
+        return _normalize(noise)  # Recursively normalize the noise vector
     return (v / n).astype(Float, copy=False)
 
 # -----------------------------------------------------------------------------
