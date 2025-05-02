@@ -114,11 +114,10 @@ class PicoVectorDB:
             with open(ids_file, "r", encoding="utf‑8") as f:
                 self._ids = json.load(f)
             count = len(self._ids)
-            mode = "r+" if self._use_memmap else "r"
             self._vectors = (
-                np.memmap(vecs_file, dtype=Float, mode=mode, shape=(count, self.dim))
+                np.memmap(vecs_file, dtype=Float, mode="r+", shape=(count, self.dim))
                 if self._use_memmap
-                else np.load(vecs_file, mmap_mode="r+")
+                else np.load(vecs_file)
             )
             # metadata (optional) ----------------------------------------------
             if os.path.exists(meta_file):
