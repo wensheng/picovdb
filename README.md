@@ -31,6 +31,6 @@ Hardware: PC with CPU Core i7-12700k and old-gen M2 Nvme SSD
    - Doing 100 queries from `100,000` vectors took roughly `1.3`s (`0.013`s per quiry).
 
 2. With FAISS:
-   - Inserting `100,000` vectors took `60`s
-   - Doing 100 queries from `100,000` vectors took `0.06`s (`0.0006`s or `0.5 millisecond` per quiry).
+   - Inserting `100,000` vectors took `50`s
+   - Doing 100 queries from `100,000` vectors took `0.05`s (`0.0005`s or `0.5 millisecond` per quiry).
    - Doing 1000 queries from `100,000` vectors in batch mode took `0.3`s (`0.0003`s or `0.3 millisecond` per quiry).

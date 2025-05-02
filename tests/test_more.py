@@ -193,7 +193,7 @@ def test_persistence_with_memmap(tmp_path):
     assert len(db2) == 5
     # clean up memmap files
     os.remove(f"{base}.ids.json")
-    os.remove(f"{base}.vecs.npy")
+    #os.remove(f"{base}.vecs.npy")
     # meta file may not exist if no additional data
     if os.path.exists(f"{base}.meta.json"):
         os.remove(f"{base}.meta.json")

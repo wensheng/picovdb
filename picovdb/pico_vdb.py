@@ -228,7 +228,7 @@ class PicoVectorDB:
         for _id in ids:
             idx = self._id2idx.pop(_id, None)
             if idx is not None:
-                self._ids[idx] = ''
+                self._ids[idx] = None
                 self._docs[idx] = None
                 self._vectors[idx].fill(0)
                 self._free.append(idx)

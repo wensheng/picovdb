@@ -4,9 +4,31 @@ from pathlib import Path
 import numpy as np
 
 from picovdb import PicoVectorDB, K_METRICS, K_ID, K_VECTOR
+from .fixtures import cleanup_test_db
 
 
-def test_init():
+# @pytest.fixture(scope="function")
+# def cleanup_test_db():
+#     """Fixture to remove test database files after test execution."""
+#     # Define paths
+#     base_name = "picovdb"
+#     db_path = Path(f"{base_name}.vecs.npy")
+#     meta_path = Path(f"{base_name}.meta.json")
+#     ids_path = Path(f"{base_name}.ids.json")
+
+#     # Setup: Ensure files don't exist before test
+#     db_path.unlink(missing_ok=True)
+#     meta_path.unlink(missing_ok=True)
+#     ids_path.unlink(missing_ok=True)
+
+#     yield base_name  # Let the test run, optionally yield the base name
+
+#     # Teardown: Cleanup after test
+#     db_path.unlink(missing_ok=True)
+#     meta_path.unlink(missing_ok=True)
+#     ids_path.unlink(missing_ok=True)
+
+def test_init(cleanup_test_db):
     from time import time
 
     data_len = 1000
@@ -33,8 +55,8 @@ def test_init():
     assert len(r) <= 10
     for d in r:
         assert d[K_METRICS] >= 0.01
-    os.remove("picovdb.meta.json")
-    os.remove("picovdb.ids.json")
+    #os.remove("picovdb.meta.json")
+    #os.remove("picovdb.ids.json")
 
 
 def test_same_upsert():
@@ -107,7 +129,7 @@ def test_cond_filter():
     assert r[0][K_ID] == 1
 
 
-def test_additonal_data():
+def test_additonal_data(cleanup_test_db):
     data_len = 10
     fake_dim = 1024
 
@@ -118,8 +140,8 @@ def test_additonal_data():
 
     a = PicoVectorDB(fake_dim)
     assert a.get_additional_data() == {"a": 1, "b": 2, "c": 3}
-    os.remove("picovdb.meta.json")
-    os.remove("picovdb.vecs.npy")
+    #os.remove("picovdb.meta.json")
+    #os.remove("picovdb.vecs.npy")
 
 
 def remove_non_empty_dir(dir_path):
@@ -127,3 +149,29 @@ def remove_non_empty_dir(dir_path):
         os.remove(os.path.join(dir_path, f))
     os.rmdir(dir_path)
 
+# Example of using the fixture in a new test
+def test_fixture_usage(cleanup_test_db):
+    # The base_name 'testbase' is yielded by the fixture
+    base_name = cleanup_test_db
+    db_path = Path(f"{base_name}.vecs.npy")
+    meta_path = Path(f"{base_name}.meta.json")
+    ids_path = Path(f"{base_name}.ids.json")
+
+    # Ensure files don't exist initially (handled by fixture setup)
+    assert not db_path.exists()
+    assert not meta_path.exists()
+    assert not ids_path.exists()
+
+    # Create a DB instance using the base name
+    # Note: Adjust dimension as needed for your PicoVectorDB implementation
+    db = PicoVectorDB(4, storage_file=base_name)
+    db.upsert([{'_vector_': np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32), '_id_': 'test1'}])
+    db.save()
+
+    # Check files exist after save
+    assert db_path.exists()
+    assert meta_path.exists()
+    assert ids_path.exists()
+
+    # The fixture's teardown will automatically remove these files
+    # after this test function finishes or fails.
