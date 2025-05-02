@@ -205,7 +205,7 @@ class PicoVectorDB:
             for item in items:
                 vec = _normalize(np.asarray(item[K_VECTOR], dtype=Float))
                 meta = {k: v for k, v in item.items() if k != K_VECTOR}
-                item_id = meta.get(K_ID) or _hash_vec(vec)
+                item_id = meta.get(K_ID) if meta.get(K_ID) is not None else _hash_vec(vec)
                 meta[K_ID] = item_id
                 if item_id in self._id2idx:
                     idx = self._id2idx[item_id]
