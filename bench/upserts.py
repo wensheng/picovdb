@@ -1,6 +1,7 @@
 import time
 import numpy as np
 
+import set_path
 from picovdb import PicoVectorDB
 
 # Configuration
