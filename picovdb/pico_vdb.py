@@ -455,12 +455,6 @@ class PicoVectorDB:
                 if idx is not None:
                     out.append(self._docs[idx] or {K_ID: _id})
             return out
-        out = []
-        for _id in ids:
-            idx = self._id2idx.get(_id)
-            if idx is not None:
-                out.append(self._docs[idx] or {K_ID: _id})
-        return out
 
     def get_by_id(self, sid: str) -> Optional[dict[str, Any]]:
         """ Get vector by ID, return dict with metadata and vector. """
@@ -469,10 +463,6 @@ class PicoVectorDB:
             if idx is not None:
                 return self._docs[idx] or {K_ID: sid}
             return None
-        idx = self._id2idx.get(sid)
-        if idx is not None:
-            return self._docs[idx] or {K_ID: sid}
-        return None
 
     def get_all(self) -> list[dict[str, Any]]:
         """ Get all vectors, return list of dicts with metadata and vector. """
@@ -484,10 +474,3 @@ class PicoVectorDB:
                 else:
                     docs.append({K_ID: _id})
             return docs
-        docs = []
-        for _id, doc in zip(self._ids, self._docs):
-            if doc is not None:
-                docs.append(doc | {K_ID: _id})
-            else:
-                docs.append({K_ID: _id})
-        return docs

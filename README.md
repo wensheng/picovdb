@@ -1,12 +1,57 @@
 # picovdb
 -----
 
-An extremely fast, ultra-lightweight local vector database
+An extremely fast, ultra-lightweight local vector database in Python.
+
+**extremely fast** sub-millisecond query
+
+**ultra-lighweight** One file with only numpy dependency and optional faiss dependency.
 
 ## Install
 
 ```shell
 pip install picovdb
+```
+
+## Usage
+
+**Create a db:**
+
+(Use SentenceTransformer embedding as example)
+```python
+from sentence_transformers import SentenceTransformer
+from picovdb import PicoVectorDB
+
+CHUNK_SIZE = 256
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+with open('dulce.txt', encoding='UTF8') as f:
+    content = f.read()
+    num_chunks = len(content) // CHUNK_SIZE + 1
+    chunks = [content[i * CHUNK_SIZE: (i + 1) * CHUNK_SIZE] for i in range(num_chunks)]
+    embeddings = model.encode(chunks)
+    data = [
+        {
+            "_vector_": embeddings[i],
+            "_id_": i,
+            "content": chunks[i],
+        }
+        for i in range(num_chunks)
+    ]
+    db = PicoVectorDB(
+        embedding_dim=model.get_sentence_embedding_dimension(),
+        storage_file='_dulce',
+    )
+    db.upsert(data)
+    db.save()
+```
+
+**Query**
+```python
+txt = "I'd laugh if we run into Martians playing poker down there—just to lighten the mood, you know?"
+emb = model.encode(txt)
+q = db.query(emb, top_k=3)
+print('query results:', q)
 ```
 
 ## Benchmark
