@@ -22,7 +22,7 @@ with open('A_Christmas_Carol.txt', encoding='UTF8') as f:
     ]
     db = PicoVectorDB(
         embedding_dim=model.get_sentence_embedding_dimension(),
-        storage_file='_aca',
+        storage_file='_acc',
     )
     db.upsert(data)
     db.save()

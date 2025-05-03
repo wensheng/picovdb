@@ -24,7 +24,7 @@ from picovdb import PicoVectorDB
 
 CHUNK_SIZE = 256
 model = SentenceTransformer('all-MiniLM-L6-v2')
-dim=model.get_sentence_embedding_dimension()
+dim = model.get_sentence_embedding_dimension()
 
 with open('A_Christmas_Carol.txt', encoding='UTF8') as f:
     content = f.read()
@@ -47,7 +47,7 @@ with open('A_Christmas_Carol.txt', encoding='UTF8') as f:
 **Query**
 ```python
 db = PicoVectorDB(embedding_dim=dim, storage_file='_acc')
-txt = "I'd laugh if we run into Martians playing poker down there—just to lighten the mood, you know?"
+txt = "Are there no prisons? Are there no workhouses?"
 emb = model.encode(txt)
 q = db.query(emb, top_k=3)
 print('query results:', q)

@@ -12,9 +12,9 @@ import numpy as np
 # optional FAISS --------------------------------------------------------------
 try:
     import faiss  # type: ignore
-    import platform
-    if platform.system() == "Darwin":
-        faiss.omp_set_num_threads(1)  # without this it crashes when 1.10.0, 1.11.0.  1.9.0 is OK.
+    # import platform
+    # if platform.system() == "Darwin":
+    #     faiss.omp_set_num_threads(1)  # without this it crashes when 1.10.0, 1.11.0.  1.9.0 is OK.
     _HAS_FAISS = True
 except ImportError:  # pragma: no cover
     _HAS_FAISS = False
