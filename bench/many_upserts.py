@@ -6,7 +6,7 @@ from picovdb import PicoVectorDB
 
 # Configuration
 DIMENSION = 1024  # Example dimension, adjust if needed
-NUM_VECTORS_TO_INSERT = 100_000
+NUM_VECTORS_TO_INSERT = 10_000
 
 print("Configuration:")
 print(f"  Vector Dimension: {DIMENSION}")
@@ -15,7 +15,7 @@ print("-" * 30)
 
 # Initialize PicoVectorDB
 print("Initializing PicoVectorDB...")
-db = PicoVectorDB(embedding_dim=DIMENSION, storage_file="demo")
+db = PicoVectorDB(embedding_dim=DIMENSION, storage_file="manyone")
 print("Initialization complete.")
 print("-" * 30)
 
@@ -29,15 +29,14 @@ print("Vector generation complete.")
 
 print("Starting vector insertion...")
 start_time_insert = time.time()
-data = [
-    {
+for i in range(vectors_to_insert.shape[0]):
+    one_data = [{
         "_vector_": vectors_to_insert[i],
-        "_id_": i,
+        "_id_": ids_to_insert[i],
         "content": f"data {i}",
-    }
-    for i in range(vectors_to_insert.shape[0])
-]
-db.upsert(data)
+    }]
+    db.upsert(one_data)
+
 end_time_insert = time.time()
 insertion_time = end_time_insert - start_time_insert
 print("Insertion complete.")

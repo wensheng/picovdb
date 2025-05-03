@@ -2,3 +2,5 @@ sentence-transformers
 poetry
 pytest
 ruff
+datasets
+faiss-cpu
