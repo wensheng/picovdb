@@ -5,7 +5,7 @@ An extremely fast, ultra-lightweight local vector database in Python.
 
 **"extremely fast"**: sub-millisecond query
 
-**"ultra-lighweight"**: One file with Numpy and one optional dependency `faiss-cpu`.
+**"ultra-lighweight"**: One file with only Numpy and one optional dependency [faiss-cpu](https://pypi.org/project/faiss-cpu/).
 
 ## Install
 
