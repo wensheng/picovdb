@@ -1,3 +1,6 @@
+"""
+Demonstrates text chunking, Huggingface embedding with sentence-transformer, and storage in a PicoVectorDB for similarity queries.
+"""
 from sentence_transformers import SentenceTransformer
 import set_path
 from picovdb import PicoVectorDB
