@@ -29,7 +29,6 @@ K_VECTOR = "_vector_"
 K_METRICS = "_metrics_"
 
 logger = logging.getLogger("picovdb")
-logging.basicConfig(level=logging.INFO)
 
 # -----------------------------------------------------------------------------
 # Utility functions
@@ -48,12 +47,16 @@ def _hash_vec(v: np.ndarray) -> str:
     return hashlib.md5(v.tobytes()).hexdigest()
 
 def _normalize(v: np.ndarray) -> np.ndarray:
-    n = np.linalg.norm(v)
-    if n == 0:
-        # Replace 0-vector with small random noise
-        noise = np.random.normal(0, 0.01, size=v.shape).astype(Float)
-        return _normalize(noise)  # Recursively normalize the noise vector
-    return (v / n).astype(Float, copy=False)
+    # Single-pass normalization with zero-safe handling (no recursion)
+    vec = np.asarray(v, dtype=Float)
+    n = float(np.linalg.norm(vec))
+    if n == 0.0:
+        # deterministically map zero to a unit vector on first axis
+        out = np.zeros_like(vec, dtype=Float)
+        if out.size:
+            out.flat[0] = Float(1.0)
+        return out
+    return (vec / n).astype(Float, copy=False)
 
 # -----------------------------------------------------------------------------
 # Main class
@@ -322,7 +325,13 @@ class PicoVectorDB:
             # normalize each query vector
             # batch normalize without Python loop
             norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-            norms[norms == 0] = 1
+            # For zero vectors, set to a deterministic unit vector on first axis
+            zero_mask = norms.squeeze(-1) == 0
+            if np.any(zero_mask):
+                vecs = vecs.copy()
+                vecs[zero_mask] = 0
+                vecs[zero_mask, 0] = 1.0
+                norms = np.where(zero_mask[:, None], 1.0, norms)
             vecs = (vecs / norms).astype(Float, copy=False)
             # compute scores and indices batch-wise
             if self._faiss is not None:
