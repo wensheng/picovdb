@@ -80,6 +80,8 @@ class PicoVectorDB:
         storage_file: str = "picovdb",
         use_memmap: bool = False,
         no_faiss: bool = False,
+        faiss_threads: Optional[int] = None,
+        ef_search_default: Optional[int] = None,
     ) -> None:
         # Initialize RWLock for thread safety
         self._lock = RLock()
@@ -105,10 +107,18 @@ class PicoVectorDB:
             base = faiss.IndexHNSWFlat(self.dim, HNSW_M, faiss.METRIC_INNER_PRODUCT)
             base.hnsw.efConstruction = HNSW_EFC
             self._faiss = faiss.IndexIDMap2(base)
+            # optionally set FAISS threads
+            if faiss_threads is not None and hasattr(faiss, "omp_set_num_threads"):
+                try:
+                    faiss.omp_set_num_threads(int(faiss_threads))  # type: ignore[attr-defined]
+                except Exception:
+                    pass
         else:
             self._faiss = None
         # dirty flag for lazy FAISS rebuilds
         self._dirty: bool = False
+        # default efSearch for FAISS HNSW
+        self._faiss_ef_search: int = int(ef_search_default) if ef_search_default is not None else HNSW_EFS
 
         self._load_or_init()
 
@@ -156,8 +166,22 @@ class PicoVectorDB:
             else:
                 self._active_indices = np.empty(0, dtype=np.int64)
             if self._faiss is not None:
-                if os.path.exists(vecs_file + ".faiss"):
-                    self._faiss = faiss.read_index(vecs_file + ".faiss")
+                faiss_path = vecs_file + ".faiss"
+                if os.path.exists(faiss_path):
+                    try:
+                        idx = faiss.read_index(faiss_path)
+                        # validate dimension; for IDMap2, d is available on the wrapper
+                        d = getattr(idx, "d", None)
+                        if d is None and hasattr(idx, "index"):
+                            d = getattr(idx.index, "d", None)  # type: ignore[attr-defined]
+                        if d != self.dim:
+                            logger.warning("FAISS index dim %s != expected %s; rebuilding", d, self.dim)
+                            self._rebuild_faiss()
+                        else:
+                            self._faiss = idx
+                    except Exception:
+                        logger.warning("Failed to read FAISS index; rebuilding")
+                        self._rebuild_faiss()
                 else:
                     self._rebuild_faiss()
                 self._dirty = False
@@ -331,6 +355,7 @@ class PicoVectorDB:
         top_k: int = 10,
         better_than: Optional[float] = None,
         where: Optional[Callable[[dict[str, Any]], bool]] = None,
+        ef_search: Optional[int] = None,
     ) -> Union[list[list[dict[str, Any]]], list[dict[str, Any]]]:
         """Query the database.
 
@@ -405,7 +430,9 @@ class PicoVectorDB:
             # Perform FAISS search and build results under read lock
             with self._rwlock.read_lock():
                 try:
-                    self._faiss.index.hnsw.efSearch = HNSW_EFS  # type: ignore[attr-defined]
+                    # prefer per-call ef_search, fall back to default
+                    ef = int(ef_search) if ef_search is not None else self._faiss_ef_search
+                    self._faiss.index.hnsw.efSearch = ef  # type: ignore[attr-defined]
                 except Exception:
                     pass
                 scores_batch, idxs_batch = self._faiss.search(vecs, top_k)
