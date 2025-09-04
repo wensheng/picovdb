@@ -456,11 +456,18 @@ class PicoVectorDB:
             # If filters are present, fetch extra candidates to mitigate underfill after filtering
             base = top_k + ADAPTIVE_BUFFER if (ids is not None or where is not None) else top_k
             k_eff = min(base, scores_act.shape[1])
-            idxs_part_local = np.argpartition(scores_act, -k_eff, axis=1)[:, -k_eff:]
-            scores_part = np.take_along_axis(scores_act, idxs_part_local, axis=1)
-            order = np.argsort(-scores_part, axis=1)
-            idxs_batch_local = np.take_along_axis(idxs_part_local, order, axis=1)
-            scores_batch = np.take_along_axis(scores_part, order, axis=1)
+            # Heuristic: prefer full argsort when k_eff is a large fraction of candidates
+            frac = k_eff / scores_act.shape[1] if scores_act.shape[1] > 0 else 0.0
+            if frac > 0.2:
+                order_full = np.argsort(-scores_act, axis=1)[:, :k_eff]
+                idxs_batch_local = order_full
+                scores_batch = np.take_along_axis(scores_act, idxs_batch_local, axis=1)
+            else:
+                idxs_part_local = np.argpartition(scores_act, -k_eff, axis=1)[:, -k_eff:]
+                scores_part = np.take_along_axis(scores_act, idxs_part_local, axis=1)
+                order = np.argsort(-scores_part, axis=1)
+                idxs_batch_local = np.take_along_axis(idxs_part_local, order, axis=1)
+                scores_batch = np.take_along_axis(scores_part, order, axis=1)
             idxs_batch = candidate_ref[idxs_batch_local]
 
         if faiss_ok:
