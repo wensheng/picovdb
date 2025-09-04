@@ -89,6 +89,8 @@ class PicoVectorDB:
         self._free: list[int] = []
         self._id2idx: dict[str, int] = {}
         self._additional: dict[str, Any] = {}
+        # Active (non-deleted) row indices for fast filtering
+        self._active_indices: np.ndarray = np.empty(0, dtype=np.int64)
 
         # faiss index ---------------------------------------------------------
         # self._faiss = faiss.IndexFlatIP(self.dim) if _HAS_FAISS else None
@@ -135,6 +137,13 @@ class PicoVectorDB:
                     self._free.append(i)
                 else:
                     self._id2idx[_id] = i
+            # build active indices (non-deleted positions)
+            if self._id2idx:
+                self._active_indices = np.fromiter(
+                    (idx for idx in self._id2idx.values()), dtype=np.int64
+                )
+            else:
+                self._active_indices = np.empty(0, dtype=np.int64)
             if self._faiss is not None:
                 if os.path.exists(vecs_file + ".faiss"):
                     self._faiss = faiss.read_index(vecs_file + ".faiss")
@@ -144,6 +153,7 @@ class PicoVectorDB:
         else:
             self._ids, self._docs = [], []
             self._vectors = np.empty((0, self.dim), dtype=Float)
+            self._active_indices = np.empty(0, dtype=np.int64)
             logger.info("No persisted data – fresh DB")
 
     def size(self) -> int:
@@ -183,6 +193,7 @@ class PicoVectorDB:
         with self._lock:
             report : dict[str, list[str]] = {"update": [], "insert": []}
             new_vecs, new_ids, new_docs = [], [], []
+            new_active: list[int] = []
             for item in items:
                 vec = _normalize(np.asarray(item[K_VECTOR], dtype=Float))
                 meta = {k: v for k, v in item.items() if k != K_VECTOR}
@@ -199,11 +210,13 @@ class PicoVectorDB:
                         self._vectors[idx] = vec
                         self._ids[idx] = item_id
                         self._docs[idx] = meta
+                        new_active.append(idx)
                     else:
                         new_vecs.append(vec)
                         new_ids.append(item_id)
                         new_docs.append(meta)
                         idx = len(self._ids) + len(new_ids) - 1
+                        new_active.append(idx)
                     self._id2idx[item_id] = idx
                     report["insert"].append(item_id)
             # bulk append ---------------------------------------------------------
@@ -214,6 +227,14 @@ class PicoVectorDB:
                 )
                 self._ids.extend(new_ids)
                 self._docs.extend(new_docs)
+            # update active indices
+            if new_active:
+                if self._active_indices.size:
+                    self._active_indices = np.append(
+                        self._active_indices, np.asarray(new_active, dtype=np.int64)
+                    )
+                else:
+                    self._active_indices = np.asarray(new_active, dtype=np.int64)
             if self._faiss is not None:
                 self._rebuild_faiss()
             return report
@@ -235,6 +256,7 @@ class PicoVectorDB:
         """ Delete vectors by IDs, return deleted IDs."""
         with self._lock:
             removed = []
+            removed_idxs: list[int] = []
             for _id in ids:
                 idx = self._id2idx.pop(_id, None)
                 if idx is not None:
@@ -242,7 +264,13 @@ class PicoVectorDB:
                     self._docs[idx] = None
                     self._vectors[idx].fill(0)
                     self._free.append(idx)
+                    removed_idxs.append(idx)
                     removed.append(_id)
+            # update active indices by removing deleted rows
+            if removed_idxs and self._active_indices.size:
+                to_remove = np.asarray(removed_idxs, dtype=np.int64)
+                mask = ~np.isin(self._active_indices, to_remove)
+                self._active_indices = self._active_indices[mask]
             if removed and self._faiss is not None:
                 self._rebuild_faiss()
             return removed
