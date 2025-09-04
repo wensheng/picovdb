@@ -135,11 +135,12 @@ class PicoVectorDB:
             else:
                 self._docs = [None] * count
             # build maps & free list ------------------------------------------
-            for i, _id in enumerate(self._ids):
-                if _id is None:
+            for i, (_id, doc) in enumerate(zip(self._ids, self._docs)):
+                if doc is None:
                     self._free.append(i)
                 else:
-                    self._id2idx[_id] = i
+                    if _id is not None:
+                        self._id2idx[_id] = i
             # build active indices (non-deleted positions)
             if self._id2idx:
                 self._active_indices = np.fromiter(
@@ -273,7 +274,6 @@ class PicoVectorDB:
             for _id in ids:
                 idx = self._id2idx.pop(_id, None)
                 if idx is not None:
-                    self._ids[idx] = None
                     self._docs[idx] = None
                     self._vectors[idx].fill(0)
                     self._free.append(idx)
@@ -366,12 +366,14 @@ class PicoVectorDB:
                 for idx, score in zip(idxs, scores):
                     if idx < 0 or idx >= len(self._ids):
                         continue
-                    doc_id = self._ids[idx]
-                    if doc_id is None:
+                    # Skip deleted entries (doc is None)
+                    doc = self._docs[idx]
+                    if doc is None:
                         continue
+                    doc_id = self._ids[idx]
                     if better_than is not None and score < better_than:
                         continue
-                    meta = self._docs[idx] or {K_ID: doc_id}
+                    meta = doc
                     if where and not where(meta):
                         continue
                     results.append({**meta, K_METRICS: float(score)})
@@ -428,23 +430,37 @@ class PicoVectorDB:
                 return rec
             return None
 
-    def get_all(self, include_vector: bool = False) -> list[dict[str, Any]]:
+    def get_all(self, include_vector: bool = False, include_deleted: bool = False) -> list[dict[str, Any]]:
         """
         Get all records.
 
         Returns metadata by default; when `include_vector=True`, also include `_vector_` for active records.
+        By default returns only active (non-deleted) records; set `include_deleted=True` to include deleted placeholders.
         """
         with self._lock:
             docs = []
-            for _id, doc in zip(self._ids, self._docs):
-                if doc is not None:
+            if include_deleted:
+                # include all slots, with placeholders for deleted
+                for _id, doc in zip(self._ids, self._docs):
+                    if doc is not None:
+                        rec = dict(doc)
+                        rec[K_ID] = _id
+                        if include_vector:
+                            idx = self._id2idx[_id]
+                            rec[K_VECTOR] = self._vectors[idx].copy()
+                        docs.append(rec)
+                    else:
+                        docs.append({K_ID: _id})
+            else:
+                # only active rows, using active indices order
+                for idx in self._active_indices.tolist():
+                    _id = self._ids[idx]
+                    doc = self._docs[idx]
+                    if _id is None or doc is None:
+                        continue
                     rec = dict(doc)
                     rec[K_ID] = _id
                     if include_vector:
-                        idx = self._id2idx[_id]
                         rec[K_VECTOR] = self._vectors[idx].copy()
                     docs.append(rec)
-                else:
-                    # deleted placeholder
-                    docs.append({K_ID: _id})
             return docs
