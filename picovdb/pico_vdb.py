@@ -361,6 +361,7 @@ class PicoVectorDB:
         top_k: int = 10,
         better_than: Optional[float] = None,
         where: Optional[Callable[[dict[str, Any]], bool]] = None,
+        ids: Optional[list[str]] = None,
         ef_search: Optional[int] = None,
     ) -> Union[list[list[dict[str, Any]]], list[dict[str, Any]]]:
         """Query the database.
@@ -405,11 +406,29 @@ class PicoVectorDB:
                 return [[] for _ in range(num_q)]
             use_faiss = self._faiss is not None
             needs_rebuild = use_faiss and self._dirty
-            if not use_faiss:
-                vectors_ref = self._vectors
-                active_idx = self._active_indices.copy()
-                ids_ref = list(self._ids)
-                docs_ref = list(self._docs)
+            # Views under lock (no copies yet)
+            vectors_view = self._vectors
+            active_idx_view = self._active_indices
+            ids_view = self._ids
+            docs_view = self._docs
+            # Build candidate indices from filters
+            candidate_idx: Optional[np.ndarray] = None
+            if ids is not None:
+                mapped = [self._id2idx.get(s) for s in ids]
+                mapped = [m for m in mapped if m is not None]
+                if mapped:
+                    candidate_idx = np.asarray(sorted(set(mapped)), dtype=np.int64)
+                else:
+                    candidate_idx = np.empty(0, dtype=np.int64)
+            if where is not None:
+                mask = [where(docs_view[i]) if docs_view[i] is not None else False for i in active_idx_view]
+                filtered = active_idx_view[np.asarray(mask, dtype=bool)]
+                if candidate_idx is None:
+                    candidate_idx = filtered
+                else:
+                    candidate_idx = np.intersect1d(candidate_idx, filtered, assume_unique=False)
+            if candidate_idx is None:
+                candidate_idx = active_idx_view
 
         if use_faiss and needs_rebuild:
             # Upgrade to write lock to rebuild FAISS lazily
@@ -418,21 +437,30 @@ class PicoVectorDB:
                     self._rebuild_faiss()
                     self._dirty = False
 
-        if not use_faiss:
+        # If FAISS is available but we have a restricted candidate set, prefer NumPy path
+        faiss_ok = use_faiss and candidate_idx.size == active_idx_view.size
+
+        if not faiss_ok:
             # Heavy math outside locks (NumPy path)
-            if active_idx.size == 0:
+            if candidate_idx.size == 0:
                 return [[] for _ in range(num_q)]
+            # Snapshot arrays and lists before releasing lock
+            with self._rwlock.read_lock():
+                vectors_ref = vectors_view
+                candidate_ref = candidate_idx.copy()
+                ids_ref = list(ids_view)
+                docs_ref = list(docs_view)
             scores_full = vecs @ vectors_ref.T  # (num_q, N)
-            scores_act = scores_full[:, active_idx]
+            scores_act = scores_full[:, candidate_ref]
             k_eff = min(top_k, scores_act.shape[1])
             idxs_part_local = np.argpartition(scores_act, -k_eff, axis=1)[:, -k_eff:]
             scores_part = np.take_along_axis(scores_act, idxs_part_local, axis=1)
             order = np.argsort(-scores_part, axis=1)
             idxs_batch_local = np.take_along_axis(idxs_part_local, order, axis=1)
             scores_batch = np.take_along_axis(scores_part, order, axis=1)
-            idxs_batch = active_idx[idxs_batch_local]
+            idxs_batch = candidate_ref[idxs_batch_local]
 
-        if use_faiss:
+        if faiss_ok:
             # Perform FAISS search and build results under read lock
             with self._rwlock.read_lock():
                 try:
@@ -442,8 +470,8 @@ class PicoVectorDB:
                 except Exception:
                     pass
                 scores_batch, idxs_batch = self._faiss.search(vecs, top_k)
-                ids_ref = self._ids
-                docs_ref = self._docs
+                ids_ref = ids_view
+                docs_ref = docs_view
                 results_batch: list[list[dict[str, Any]]] = []
                 for qi in range(num_q):
                     idxs = idxs_batch[qi]
@@ -452,15 +480,13 @@ class PicoVectorDB:
                     for idx, score in zip(idxs, scores):
                         if idx < 0 or idx >= len(ids_ref):
                             continue
+                        # Since faiss_ok implies no filter beyond actives, no need to test where/ids here
                         doc = docs_ref[idx]
                         if doc is None:
                             continue
                         if better_than is not None and score < better_than:
                             continue
-                        meta = doc
-                        if where and not where(meta):
-                            continue
-                        results.append({**meta, K_METRICS: float(score)})
+                        results.append({**doc, K_METRICS: float(score)})
                         if len(results) == top_k:
                             break
                     results_batch.append(results)
