@@ -303,18 +303,25 @@ class PicoVectorDB:
                 self._faiss.hnsw.efSearch = HNSW_EFS
                 scores_batch, idxs_batch = self._faiss.search(vecs, top_k)
             else:
-                # vectorized top-k selection
-                scores = self._vectors @ vecs.T  # shape (N, num_q)
-                k_eff = min(top_k, self._vectors.shape[0])
-                # partial top-k indices per query
-                idxs_part = np.argpartition(scores, -k_eff, axis=0)[-k_eff:, :]  # shape (k_eff, num_q)
-                # gather scores for those indices
-                scores_part = scores[idxs_part, np.arange(num_q)[None, :]]  # shape (k_eff, num_q)
+                # Use only active (non-deleted) rows for scoring without copying (avoid large fancy-indexed candidate matrix)
+                active_idx = self._active_indices
+                if active_idx.size == 0:
+                    return [[] for _ in range(num_q)]
+                # Compute full scores then slice active columns; cheaper than slicing vectors first
+                scores_full = vecs @ self._vectors.T  # shape (num_q, N)
+                scores_act = scores_full[:, active_idx]  # shape (num_q, M_active)
+                k_eff = min(top_k, scores_act.shape[1])
+                # partial top-k indices per query along axis=1 (local to active set)
+                idxs_part_local = np.argpartition(scores_act, -k_eff, axis=1)[:, -k_eff:]
+                # gather scores for those local indices
+                scores_part = np.take_along_axis(scores_act, idxs_part_local, axis=1)
                 # sort within top-k
-                order = np.argsort(-scores_part, axis=0)  # shape (k_eff, num_q)
-                # build final batch indices and scores
-                idxs_batch = np.take_along_axis(idxs_part, order, axis=0).T  # shape (num_q, k_eff)
-                scores_batch = np.take_along_axis(scores_part, order, axis=0).T
+                order = np.argsort(-scores_part, axis=1)
+                # local indices ordered by score
+                idxs_batch_local = np.take_along_axis(idxs_part_local, order, axis=1)
+                scores_batch = np.take_along_axis(scores_part, order, axis=1)
+                # map local active positions back to global row indices
+                idxs_batch = active_idx[idxs_batch_local]
             # build results for each query
             results_batch: list[list[dict[str, Any]]] = []
             for qi in range(num_q):
