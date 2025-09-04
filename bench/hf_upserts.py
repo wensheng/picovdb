@@ -1,27 +1,27 @@
 from sentence_transformers import SentenceTransformer
-from sentence_transformers.util import cos_sim
-from sentence_transformers.quantization import quantize_embeddings
 from datasets import load_dataset
-import set_path
 from picovdb import PicoVectorDB
 
 DIMENSION = 512
-model = SentenceTransformer("mixedbread-ai/mxbai-embed-large-v1", truncate_dim=DIMENSION)
+model = SentenceTransformer(
+    "mixedbread-ai/mxbai-embed-large-v1", truncate_dim=DIMENSION
+)
 rag_data = load_dataset("neural-bridge/rag-dataset-1200")
 
 embeddings = model.encode(
-    rag_data['train']['context'],
-    show_progress_bar=True,
-    convert_to_tensor=True
+    rag_data["train"]["context"], show_progress_bar=True, convert_to_tensor=True
 )
 rows = rag_data["train"].to_list()
-docs = [{
-    "_id_": str(i),
-    "_vector_": embeddings[i].cpu().numpy(),
-    "context": row['context'],
-    "question": row['question'],
-    "answer": row['answer'],
-} for i, row in enumerate(rows)]
+docs = [
+    {
+        "_id_": str(i),
+        "_vector_": embeddings[i].cpu().numpy(),
+        "context": row["context"],
+        "question": row["question"],
+        "answer": row["answer"],
+    }
+    for i, row in enumerate(rows)
+]
 
 hf_data_vdb = PicoVectorDB(embedding_dim=DIMENSION, storage_file="hfdata")
 hf_data_vdb.upsert(docs)

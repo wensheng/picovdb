@@ -1,5 +1,6 @@
 import time
 import numpy as np
+
 import set_path
 from picovdb import PicoVectorDB
 
@@ -14,7 +15,7 @@ print(f"  Number of Queries: {NUM_QUERIES:,}")
 print(f"  K Neighbors: {K_NEIGHBORS}")
 print("-" * 30)
 
-db = PicoVectorDB(embedding_dim=DIMENSION, storage_file="demo")
+db = PicoVectorDB(embedding_dim=DIMENSION, storage_file="demo", ef_search_default=32)
 
 # --- Query Phase ---
 print(f"Generating {NUM_QUERIES:,} random query vectors...")

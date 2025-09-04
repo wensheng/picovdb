@@ -1,7 +1,6 @@
 import time
 import numpy as np
 
-import set_path
 from picovdb import PicoVectorDB
 
 # Configuration
@@ -30,11 +29,13 @@ print("Vector generation complete.")
 print("Starting vector insertion...")
 start_time_insert = time.time()
 for i in range(vectors_to_insert.shape[0]):
-    one_data = [{
-        "_vector_": vectors_to_insert[i],
-        "_id_": ids_to_insert[i],
-        "content": f"data {i}",
-    }]
+    one_data = [
+        {
+            "_vector_": vectors_to_insert[i],
+            "_id_": ids_to_insert[i],
+            "content": f"data {i}",
+        }
+    ]
     db.upsert(one_data)
 
 end_time_insert = time.time()
