@@ -1,6 +1,7 @@
 """
 PicoVectorDB: A simple and fast vector database
 """
+
 import os
 import json
 import hashlib
@@ -12,9 +13,11 @@ import threading
 from contextlib import contextmanager
 
 import numpy as np
+
 # optional FAISS --------------------------------------------------------------
 try:
     import faiss  # type: ignore
+
     # import platform
     # if platform.system() == "Darwin":
     #     faiss.omp_set_num_threads(1)  # without this it crashes when 1.10.0, 1.11.0.  1.9.0 is OK.
@@ -38,17 +41,22 @@ logger = logging.getLogger("picovdb")
 # Utility functions
 # -----------------------------------------------------------------------------
 
+
 def _ids_path(base: str) -> str:
     return f"{base}.ids.json"
+
 
 def _meta_path(base: str) -> str:
     return f"{base}.meta.json"
 
+
 def _vecs_path(base: str) -> str:
     return f"{base}.vecs.npy"
 
+
 def _hash_vec(v: np.ndarray) -> str:
     return hashlib.md5(v.tobytes()).hexdigest()
+
 
 def _normalize(v: np.ndarray) -> np.ndarray:
     # Single-pass normalization with zero-safe handling (no recursion)
@@ -62,13 +70,16 @@ def _normalize(v: np.ndarray) -> np.ndarray:
         return out
     return (vec / n).astype(Float, copy=False)
 
+
 def _to_c_f32(a: np.ndarray) -> np.ndarray:
     """Return a C-contiguous float32 view/copy of the array."""
     return np.ascontiguousarray(a, dtype=Float)
 
+
 # -----------------------------------------------------------------------------
 # Main class
 # -----------------------------------------------------------------------------
+
 
 class PicoVectorDB:
     """Cosine‑only vector DB with metadata persistence.
@@ -123,7 +134,9 @@ class PicoVectorDB:
         # dirty flag for lazy FAISS rebuilds
         self._dirty: bool = False
         # default efSearch for FAISS HNSW
-        self._faiss_ef_search: int = int(ef_search_default) if ef_search_default is not None else HNSW_EFS
+        self._faiss_ef_search: int = (
+            int(ef_search_default) if ef_search_default is not None else HNSW_EFS
+        )
 
         self._load_or_init()
 
@@ -180,7 +193,11 @@ class PicoVectorDB:
                         if d is None and hasattr(idx, "index"):
                             d = getattr(idx.index, "d", None)  # type: ignore[attr-defined]
                         if d != self.dim:
-                            logger.warning("FAISS index dim %s != expected %s; rebuilding", d, self.dim)
+                            logger.warning(
+                                "FAISS index dim %s != expected %s; rebuilding",
+                                d,
+                                self.dim,
+                            )
                             self._rebuild_faiss()
                         else:
                             self._faiss = idx
@@ -260,7 +277,7 @@ class PicoVectorDB:
         # Mutators
         """
         with self._rwlock.write_lock():
-            report : dict[str, list[str]] = {"update": [], "insert": []}
+            report: dict[str, list[str]] = {"update": [], "insert": []}
             new_vecs, new_ids, new_docs = [], [], []
             new_active: list[int] = []
             for item in items:
@@ -276,7 +293,9 @@ class PicoVectorDB:
                     )
                 vec = _normalize(vec_raw)
                 meta = {k: v for k, v in item.items() if k != K_VECTOR}
-                item_id = meta.get(K_ID) if meta.get(K_ID) is not None else _hash_vec(vec)
+                item_id = (
+                    meta.get(K_ID) if meta.get(K_ID) is not None else _hash_vec(vec)
+                )
                 meta[K_ID] = item_id
                 if item_id in self._id2idx:
                     idx = self._id2idx[item_id]
@@ -301,11 +320,16 @@ class PicoVectorDB:
             # bulk append ---------------------------------------------------------
             if new_vecs:
                 stacked = np.vstack(new_vecs)
-                self._vectors = (
-                    _to_c_f32(stacked)
-                    if not self._ids
-                    else _to_c_f32(np.vstack([self._vectors, stacked]))
-                )
+                if not self._ids:
+                    self._vectors = _to_c_f32(stacked)
+                else:
+                    if self._use_memmap and isinstance(self._vectors, np.memmap):
+                        logger.warning(
+                            "Appending to a memmapped file converts it to an in-memory numpy array, "
+                            "doubling memory usage. For large datasets, consider pre-allocating "
+                            "capacity or using a different growth strategy."
+                        )
+                    self._vectors = _to_c_f32(np.vstack([self._vectors, stacked]))
                 self._ids.extend(new_ids)
                 self._docs.extend(new_docs)
             # update active indices
@@ -335,7 +359,7 @@ class PicoVectorDB:
             return self._additional
 
     def delete(self, ids: list[str]) -> list[str]:
-        """ Delete vectors by IDs, return deleted IDs."""
+        """Delete vectors by IDs, return deleted IDs."""
         with self._rwlock.write_lock():
             removed = []
             removed_idxs: list[int] = []
@@ -422,12 +446,17 @@ class PicoVectorDB:
                 else:
                     candidate_idx = np.empty(0, dtype=np.int64)
             if where is not None:
-                mask = [where(docs_view[i]) if docs_view[i] is not None else False for i in active_idx_view]
+                mask = [
+                    where(docs_view[i]) if docs_view[i] is not None else False
+                    for i in active_idx_view
+                ]
                 filtered = active_idx_view[np.asarray(mask, dtype=bool)]
                 if candidate_idx is None:
                     candidate_idx = filtered
                 else:
-                    candidate_idx = np.intersect1d(candidate_idx, filtered, assume_unique=False)
+                    candidate_idx = np.intersect1d(
+                        candidate_idx, filtered, assume_unique=False
+                    )
             if candidate_idx is None:
                 candidate_idx = active_idx_view
 
@@ -454,7 +483,11 @@ class PicoVectorDB:
             scores_full = vecs @ vectors_ref.T  # (num_q, N)
             scores_act = scores_full[:, candidate_ref]
             # If filters are present, fetch extra candidates to mitigate underfill after filtering
-            base = top_k + ADAPTIVE_BUFFER if (ids is not None or where is not None) else top_k
+            base = (
+                top_k + ADAPTIVE_BUFFER
+                if (ids is not None or where is not None)
+                else top_k
+            )
             k_eff = min(base, scores_act.shape[1])
             # Heuristic: prefer full argsort when k_eff is a large fraction of candidates
             frac = k_eff / scores_act.shape[1] if scores_act.shape[1] > 0 else 0.0
@@ -463,7 +496,9 @@ class PicoVectorDB:
                 idxs_batch_local = order_full
                 scores_batch = np.take_along_axis(scores_act, idxs_batch_local, axis=1)
             else:
-                idxs_part_local = np.argpartition(scores_act, -k_eff, axis=1)[:, -k_eff:]
+                idxs_part_local = np.argpartition(scores_act, -k_eff, axis=1)[
+                    :, -k_eff:
+                ]
                 scores_part = np.take_along_axis(scores_act, idxs_part_local, axis=1)
                 order = np.argsort(-scores_part, axis=1)
                 idxs_batch_local = np.take_along_axis(idxs_part_local, order, axis=1)
@@ -475,7 +510,11 @@ class PicoVectorDB:
             with self._rwlock.read_lock():
                 try:
                     # prefer per-call ef_search, fall back to default
-                    ef = int(ef_search) if ef_search is not None else self._faiss_ef_search
+                    ef = (
+                        int(ef_search)
+                        if ef_search is not None
+                        else self._faiss_ef_search
+                    )
                     self._faiss.index.hnsw.efSearch = ef  # type: ignore[attr-defined]
                 except Exception:
                     pass
@@ -573,7 +612,9 @@ class PicoVectorDB:
                     out.append(rec)
             return out
 
-    def get_by_id(self, sid: str, include_vector: bool = False) -> Optional[dict[str, Any]]:
+    def get_by_id(
+        self, sid: str, include_vector: bool = False
+    ) -> Optional[dict[str, Any]]:
         """
         Get a single record by ID.
 
@@ -589,7 +630,9 @@ class PicoVectorDB:
                 return rec
             return None
 
-    def get_all(self, include_vector: bool = False, include_deleted: bool = False) -> list[dict[str, Any]]:
+    def get_all(
+        self, include_vector: bool = False, include_deleted: bool = False
+    ) -> list[dict[str, Any]]:
         """
         Get all records.
 
@@ -623,9 +666,12 @@ class PicoVectorDB:
                         rec[K_VECTOR] = self._vectors[idx].copy()
                     docs.append(rec)
             return docs
+
+
 # -----------------------------------------------------------------------------
 # Concurrency
 # -----------------------------------------------------------------------------
+
 
 class _RWLock:
     def __init__(self) -> None:
