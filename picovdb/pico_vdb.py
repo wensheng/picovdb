@@ -174,18 +174,21 @@ class PicoVectorDB:
             DeprecationWarning,
             stacklevel=2,
         )
-        return len(self._ids)
+        with self._rwlock.read_lock():
+            return len(self._ids)
 
     def capacity(self) -> int:
         """
         Returns total slots (including deleted placeholders).
         Use `count()` for active item count.
         """
-        return len(self._ids)
+        with self._rwlock.read_lock():
+            return len(self._ids)
 
     def count(self) -> int:
         """Return the number of active (non-deleted) items."""
-        return len(self._id2idx)
+        with self._rwlock.read_lock():
+            return len(self._id2idx)
 
     def save(self) -> None:
         """
