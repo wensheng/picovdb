@@ -10,7 +10,12 @@ from picovdb.pico_vdb import PicoVectorDB, _HAS_FAISS, K_VECTOR, K_ID
 def test_missing_faiss_file_triggers_rebuild(tmp_path):
     base = str(tmp_path / "safe1")
     db = PicoVectorDB(embedding_dim=8, storage_file=base)
-    db.upsert([{K_VECTOR: np.random.rand(8).astype(np.float32), K_ID: str(i)} for i in range(10)])
+    db.upsert(
+        [
+            {K_VECTOR: np.random.rand(8).astype(np.float32), K_ID: str(i)}
+            for i in range(10)
+        ]
+    )
     db.save()
 
     faiss_path = f"{base}.vecs.npy.faiss"
@@ -29,11 +34,21 @@ def test_dim_mismatch_faiss_file_triggers_rebuild(tmp_path):
     base8 = str(tmp_path / "safe2_8")
     base16 = str(tmp_path / "safe2_16")
     db8 = PicoVectorDB(embedding_dim=8, storage_file=base8)
-    db8.upsert([{K_VECTOR: np.random.rand(8).astype(np.float32), K_ID: str(i)} for i in range(5)])
+    db8.upsert(
+        [
+            {K_VECTOR: np.random.rand(8).astype(np.float32), K_ID: str(i)}
+            for i in range(5)
+        ]
+    )
     db8.save()
 
     db16 = PicoVectorDB(embedding_dim=16, storage_file=base16)
-    db16.upsert([{K_VECTOR: np.random.rand(16).astype(np.float32), K_ID: str(i)} for i in range(7)])
+    db16.upsert(
+        [
+            {K_VECTOR: np.random.rand(16).astype(np.float32), K_ID: str(i)}
+            for i in range(7)
+        ]
+    )
     db16.save()
 
     # Overwrite 8-dim store's FAISS file with 16-dim one

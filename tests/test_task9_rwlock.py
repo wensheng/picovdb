@@ -45,4 +45,3 @@ def test_rwlock_readers_coexist_writer_excludes():
 
     assert max_readers >= 2
     assert not errors
-

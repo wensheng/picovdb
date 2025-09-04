@@ -24,7 +24,7 @@ def test_active_indices_tracks_mutations(tmp_path):
     assert sorted_list(db._active_indices) == sorted_list(expect_from_map)
 
     # delete two and verify
-    db.delete(["id1", "id3"]) 
+    db.delete(["id1", "id3"])
     expect_positions = [i for i, doc in enumerate(db._docs) if doc is not None]
     expect_from_map = list(db._id2idx.values())
     assert sorted_list(db._active_indices) == sorted_list(expect_positions)

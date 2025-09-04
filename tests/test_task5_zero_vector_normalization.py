@@ -29,8 +29,13 @@ def test_query_zero_vector_is_unit_and_deterministic(tmp_path):
     e1 = np.array([0, 1, 0], dtype=np.float32)
     e2 = np.array([0, 0, 1], dtype=np.float32)
     db = PicoVectorDB(embedding_dim=3, storage_file=str(tmp_path / "qz"), no_faiss=True)
-    db.upsert([{K_VECTOR: e0, K_ID: "0"}, {K_VECTOR: e1, K_ID: "1"}, {K_VECTOR: e2, K_ID: "2"}])
+    db.upsert(
+        [
+            {K_VECTOR: e0, K_ID: "0"},
+            {K_VECTOR: e1, K_ID: "1"},
+            {K_VECTOR: e2, K_ID: "2"},
+        ]
+    )
     # Zero query should map to e0 deterministically
     res = db.query(np.zeros(3, dtype=np.float32), top_k=3)
     assert res[0][K_ID] == "0"
-

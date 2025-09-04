@@ -4,11 +4,10 @@ from picovdb.pico_vdb import PicoVectorDB, K_VECTOR, K_ID
 
 
 def test_get_all_defaults_exclude_deleted(tmp_path):
-    db = PicoVectorDB(embedding_dim=3, storage_file=str(tmp_path / "all"), no_faiss=True)
-    items = [
-        {K_VECTOR: np.eye(3, dtype=np.float32)[i], K_ID: str(i)}
-        for i in range(3)
-    ]
+    db = PicoVectorDB(
+        embedding_dim=3, storage_file=str(tmp_path / "all"), no_faiss=True
+    )
+    items = [{K_VECTOR: np.eye(3, dtype=np.float32)[i], K_ID: str(i)} for i in range(3)]
     db.upsert(items)
     db.delete(["1"])  # delete middle
 
@@ -30,4 +29,3 @@ def test_get_all_defaults_exclude_deleted(tmp_path):
     res_vecs = db.get_all(include_vector=True)
     for r in res_vecs:
         assert K_VECTOR in r and r[K_ID] in {"0", "2"}
-

@@ -5,7 +5,9 @@ from picovdb.pico_vdb import PicoVectorDB, K_VECTOR, K_ID
 
 def test_query_uses_only_active_rows(tmp_path):
     dim = 8
-    db = PicoVectorDB(embedding_dim=dim, storage_file=str(tmp_path / "store2"), no_faiss=True)
+    db = PicoVectorDB(
+        embedding_dim=dim, storage_file=str(tmp_path / "store2"), no_faiss=True
+    )
 
     # Insert 30 random items
     items = [
@@ -31,7 +33,9 @@ def test_query_uses_only_active_rows(tmp_path):
     assert all(r[K_ID] in active_ids for r in res)
 
     # When no deletions, results count should be top_k (bounded by total)
-    db2 = PicoVectorDB(embedding_dim=dim, storage_file=str(tmp_path / "store3"), no_faiss=True)
+    db2 = PicoVectorDB(
+        embedding_dim=dim, storage_file=str(tmp_path / "store3"), no_faiss=True
+    )
     db2.upsert(items)
     res2 = db2.query(q, top_k=15)
     assert len(res2) == 15  # 30 available, top_k 15

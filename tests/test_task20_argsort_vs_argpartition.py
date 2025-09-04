@@ -34,4 +34,3 @@ def test_argsort_argpartition_equivalence_small_and_large_k(tmp_path):
     ids_large = [r[K_ID] for r in res_large]
     ids_large_base = baseline_topk(db._vectors, q, k_large, [str(i) for i in range(N)])
     assert ids_large == ids_large_base
-

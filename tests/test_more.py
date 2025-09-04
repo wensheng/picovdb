@@ -1,7 +1,5 @@
 import os
-import json
-import shutil
-import tempfile
+import logging
 
 import numpy as np
 import pytest
@@ -15,7 +13,6 @@ from picovdb.pico_vdb import (
     _vecs_path,
     K_VECTOR,
     K_ID,
-    K_METRICS,
 )
 
 
@@ -125,7 +122,7 @@ def test_delete_and_reuse_free_slot(tmp_path):
     assert removed == ["1"]
     assert len(db) == 2
     # insert new, should reuse slot
-    db.upsert([{K_VECTOR: np.array([1,1,1], dtype=np.float32), K_ID: "new"}])
+    db.upsert([{K_VECTOR: np.array([1, 1, 1], dtype=np.float32), K_ID: "new"}])
     assert len(db) == 3
     # ensure "new" in get_all
     ids = [d[K_ID] for d in db.get_all()]
@@ -193,7 +190,44 @@ def test_persistence_with_memmap(tmp_path):
     assert len(db2) == 5
     # clean up memmap files
     os.remove(f"{base}.ids.json")
-    #os.remove(f"{base}.vecs.npy")
+    # os.remove(f"{base}.vecs.npy")
     # meta file may not exist if no additional data
     if os.path.exists(f"{base}.meta.json"):
         os.remove(f"{base}.meta.json")
+
+
+def test_memmap_append_warning(tmp_path, caplog):
+    """Verify that appending to a memmapped DB logs a warning."""
+    db_path = str(tmp_path / "test_db")
+    db = PicoVectorDB(embedding_dim=2, storage_file=db_path, use_memmap=True)
+    db.upsert([{K_ID: "a", K_VECTOR: [1.0, 2.0]}])
+    db.save()
+
+    # Re-load to ensure memmap is used
+    db2 = PicoVectorDB(embedding_dim=2, storage_file=db_path, use_memmap=True)
+    assert isinstance(db2._vectors, np.memmap)
+
+    # With memmap, appending should trigger a warning
+    with caplog.at_level(logging.WARNING, logger="picovdb"):
+        caplog.clear()
+        db2.upsert([{K_ID: "b", K_VECTOR: [3.0, 4.0]}])
+        assert "Appending to a memmapped file" in caplog.text
+        assert "converts it to an in-memory" in caplog.text
+
+    # Check that it doesn't warn when memmap is not used
+    db3_path = str(tmp_path / "test_db3")
+    db3 = PicoVectorDB(embedding_dim=2, storage_file=db3_path, use_memmap=False)
+    db3.upsert([{K_ID: "a", K_VECTOR: [1.0, 2.0]}])
+    db3.save()
+    db4 = PicoVectorDB(embedding_dim=2, storage_file=db3_path, use_memmap=False)
+
+    with caplog.at_level(logging.WARNING, logger="picovdb"):
+        caplog.clear()
+        db4.upsert([{K_ID: "b", K_VECTOR: [3.0, 4.0]}])
+        assert "Appending to a memmapped file" not in caplog.text
+
+    # Check that it doesn't warn on update
+    with caplog.at_level(logging.WARNING, logger="picovdb"):
+        caplog.clear()
+        db2.upsert([{K_ID: "a", K_VECTOR: [5.0, 6.0]}])
+        assert "Appending to a memmapped file" not in caplog.text

@@ -32,12 +32,19 @@ def test_vectors_are_c_contiguous_float32_after_ops_and_reload(tmp_path):
 def test_memmap_load_is_c_f32(tmp_path):
     dim = 6
     base = str(tmp_path / "mm")
-    db = PicoVectorDB(embedding_dim=dim, storage_file=base, use_memmap=True, no_faiss=True)
-    items = [{K_VECTOR: np.random.rand(dim).astype(np.float32), K_ID: str(i)} for i in range(4)]
+    db = PicoVectorDB(
+        embedding_dim=dim, storage_file=base, use_memmap=True, no_faiss=True
+    )
+    items = [
+        {K_VECTOR: np.random.rand(dim).astype(np.float32), K_ID: str(i)}
+        for i in range(4)
+    ]
     db.upsert(items)
     db.save()
 
-    db2 = PicoVectorDB(embedding_dim=dim, storage_file=base, use_memmap=True, no_faiss=True)
+    db2 = PicoVectorDB(
+        embedding_dim=dim, storage_file=base, use_memmap=True, no_faiss=True
+    )
     arr = db2._vectors
     # memmap should also be C-contiguous float32
     assert arr.dtype == np.float32 and arr.flags["C_CONTIGUOUS"]
@@ -45,11 +52,12 @@ def test_memmap_load_is_c_f32(tmp_path):
 
 def test_query_accepts_noncontiguous_inputs(tmp_path):
     dim = 8
-    db = PicoVectorDB(embedding_dim=dim, storage_file=str(tmp_path / "qnc"), no_faiss=True)
+    db = PicoVectorDB(
+        embedding_dim=dim, storage_file=str(tmp_path / "qnc"), no_faiss=True
+    )
     db.upsert([{K_VECTOR: np.random.rand(dim).astype(np.float32), K_ID: "x"}])
 
     # Fortran-ordered 2D input
     qs = np.asfortranarray(np.random.rand(3, dim).astype(np.float32))
     res = db.query(qs, top_k=1)
     assert isinstance(res, list) and len(res) == 3
-

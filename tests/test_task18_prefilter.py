@@ -6,7 +6,9 @@ from picovdb.pico_vdb import PicoVectorDB, _HAS_FAISS, K_VECTOR, K_ID
 
 def test_where_prefilter_limits_candidates_numpy(tmp_path):
     dim = 5
-    db = PicoVectorDB(embedding_dim=dim, storage_file=str(tmp_path / "pf"), no_faiss=True)
+    db = PicoVectorDB(
+        embedding_dim=dim, storage_file=str(tmp_path / "pf"), no_faiss=True
+    )
     items = []
     for i in range(20):
         vec = np.random.rand(dim).astype(np.float32)
@@ -29,7 +31,7 @@ def test_ids_prefilter_limits_candidates_with_faiss(tmp_path):
 
     # Restrict to ids {"1","3","5"}
     q = (0.6 * vs[1] + 0.3 * vs[3] + 0.1 * vs[5]).astype(np.float32)
-    res = db.query(q, top_k=3, ids=["1", "3", "5"]) 
+    res = db.query(q, top_k=3, ids=["1", "3", "5"])
     got = [r[K_ID] for r in res]
     assert set(got).issubset({"1", "3", "5"})
     # best should be "1"

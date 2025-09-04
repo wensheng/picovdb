@@ -28,7 +28,9 @@ def test_writer_blocks_reads(tmp_path):
 
 
 def test_readers_can_enter_concurrently(tmp_path):
-    db = PicoVectorDB(embedding_dim=4, storage_file=str(tmp_path / "rw2"), no_faiss=True)
+    db = PicoVectorDB(
+        embedding_dim=4, storage_file=str(tmp_path / "rw2"), no_faiss=True
+    )
     db.upsert([{K_VECTOR: np.ones(4, dtype=np.float32), K_ID: "a"}])
 
     entered = []
@@ -41,10 +43,11 @@ def test_readers_can_enter_concurrently(tmp_path):
 
     t1 = threading.Thread(target=reader_hold)
     t2 = threading.Thread(target=reader_hold)
-    t1.start(); t2.start()
+    t1.start()
+    t2.start()
     time.sleep(0.02)
     # Both readers should be in the critical section
     assert len(entered) >= 2
     proceed.set()
-    t1.join(); t2.join()
-
+    t1.join()
+    t2.join()
