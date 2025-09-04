@@ -27,6 +27,7 @@ Float = np.float32
 HNSW_M = 32  # number of connections each vertex will have
 HNSW_EFC = 40  # depth of layers explored during index construction
 HNSW_EFS = 32  # depth of layers explored during search
+ADAPTIVE_BUFFER = 32  # extra candidates to fetch under filters
 K_ID = "_id_"
 K_VECTOR = "_vector_"
 K_METRICS = "_metrics_"
@@ -452,7 +453,9 @@ class PicoVectorDB:
                 docs_ref = list(docs_view)
             scores_full = vecs @ vectors_ref.T  # (num_q, N)
             scores_act = scores_full[:, candidate_ref]
-            k_eff = min(top_k, scores_act.shape[1])
+            # If filters are present, fetch extra candidates to mitigate underfill after filtering
+            base = top_k + ADAPTIVE_BUFFER if (ids is not None or where is not None) else top_k
+            k_eff = min(base, scores_act.shape[1])
             idxs_part_local = np.argpartition(scores_act, -k_eff, axis=1)[:, -k_eff:]
             scores_part = np.take_along_axis(scores_act, idxs_part_local, axis=1)
             order = np.argsort(-scores_part, axis=1)
