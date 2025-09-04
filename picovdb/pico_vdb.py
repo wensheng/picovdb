@@ -61,6 +61,10 @@ def _normalize(v: np.ndarray) -> np.ndarray:
         return out
     return (vec / n).astype(Float, copy=False)
 
+def _to_c_f32(a: np.ndarray) -> np.ndarray:
+    """Return a C-contiguous float32 view/copy of the array."""
+    return np.ascontiguousarray(a, dtype=Float)
+
 # -----------------------------------------------------------------------------
 # Main class
 # -----------------------------------------------------------------------------
@@ -141,7 +145,7 @@ class PicoVectorDB:
             self._vectors = (
                 np.memmap(vecs_file, dtype=Float, mode="r+", shape=(count, self.dim))
                 if self._use_memmap
-                else np.load(vecs_file)
+                else _to_c_f32(np.load(vecs_file))
             )
             # metadata (optional) ----------------------------------------------
             if os.path.exists(meta_file):
@@ -297,7 +301,9 @@ class PicoVectorDB:
             if new_vecs:
                 stacked = np.vstack(new_vecs)
                 self._vectors = (
-                    stacked if not self._ids else np.vstack([self._vectors, stacked])
+                    _to_c_f32(stacked)
+                    if not self._ids
+                    else _to_c_f32(np.vstack([self._vectors, stacked]))
                 )
                 self._ids.extend(new_ids)
                 self._docs.extend(new_docs)
