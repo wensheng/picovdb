@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from picovdb import PicoVectorDB, K_METRICS, K_ID, K_VECTOR
+from picovdb import PicoVectorDB, K_METRICS, K_ID, K_VECTOR, _HAS_FAISS
 
 
 @pytest.fixture(scope="function")
@@ -21,12 +21,18 @@ def cleanup_test_db():
     meta_path.unlink(missing_ok=True)
     ids_path.unlink(missing_ok=True)
 
+    if _HAS_FAISS:
+        faiss_path = Path(f"{base_name}.vecs.npy.faiss")
+        faiss_path.unlink(missing_ok=True)
+
     yield base_name  # Let the test run, optionally yield the base name
 
     # Teardown: Cleanup after test
     db_path.unlink(missing_ok=True)
     meta_path.unlink(missing_ok=True)
     ids_path.unlink(missing_ok=True)
+    if _HAS_FAISS:
+        faiss_path.unlink(missing_ok=True)
 
 
 def test_init(cleanup_test_db):

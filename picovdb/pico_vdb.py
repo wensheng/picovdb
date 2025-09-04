@@ -7,6 +7,7 @@ import json
 import hashlib
 import logging
 import warnings
+import time
 from typing import Any, Callable, Literal, Optional, Union
 from threading import RLock
 import threading
@@ -81,6 +82,22 @@ def _to_c_f32(a: np.ndarray) -> np.ndarray:
 # -----------------------------------------------------------------------------
 
 
+def _timed(name: str):
+    """Decorator for DEBUG-level timing."""
+
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = func(*args, **kwargs)
+            end = time.perf_counter()
+            logger.debug("%s took %.4f ms", name, (end - start) * 1000)
+            return result
+
+        return wrapper
+
+    return decorator
+
+
 class PicoVectorDB:
     """Cosine‑only vector DB with metadata persistence.
 
@@ -95,6 +112,7 @@ class PicoVectorDB:
         metric: Literal["cosine"] = "cosine",
         storage_file: str = "picovdb",
         use_memmap: bool = False,
+        capacity: Optional[int] = None,
         no_faiss: bool = False,
         faiss_threads: Optional[int] = None,
         ef_search_default: Optional[int] = None,
@@ -106,6 +124,7 @@ class PicoVectorDB:
         self.metric = metric
         self._path = storage_file
         self._use_memmap = use_memmap
+        self._capacity = capacity
 
         # in‑memory parallel lists ------------------------------------------------
         self._vectors: np.ndarray  # (N, dim) float32 & L2‑normalised
@@ -144,6 +163,7 @@ class PicoVectorDB:
     # Persistence helpers
     # ---------------------------------------------------------------------
 
+    @_timed("load")
     def _load_or_init(self) -> None:
         ids_file, vecs_file, meta_file = (
             _ids_path(self._path),
@@ -209,8 +229,20 @@ class PicoVectorDB:
                 self._dirty = False
             logger.info("Loaded %d active / %d total vectors", len(self._id2idx), count)
         else:
-            self._ids, self._docs = [], []
-            self._vectors = np.empty((0, self.dim), dtype=Float)
+            if self._use_memmap and self._capacity is not None:
+                # Pre-allocate memmap file
+                self._vectors = np.memmap(
+                    vecs_file,
+                    dtype=Float,
+                    mode="w+",
+                    shape=(self._capacity, self.dim),
+                )
+                self._ids = [None] * self._capacity
+                self._docs = [None] * self._capacity
+                self._free = list(range(self._capacity))
+            else:
+                self._ids, self._docs = [], []
+                self._vectors = np.empty((0, self.dim), dtype=Float)
             self._active_indices = np.empty(0, dtype=np.int64)
             logger.info("No persisted data – fresh DB")
             self._dirty = False
@@ -241,6 +273,7 @@ class PicoVectorDB:
         with self._rwlock.read_lock():
             return len(self._id2idx)
 
+    @_timed("save")
     def save(self) -> None:
         """
         Persist the current state of the database atomically, overwriting existing files.
@@ -351,6 +384,8 @@ class PicoVectorDB:
                         self._docs[idx] = meta
                         new_active.append(idx)
                     else:
+                        if self._capacity is not None:
+                            raise ValueError("Database capacity exceeded")
                         new_vecs.append(vec)
                         new_ids.append(item_id)
                         new_docs.append(meta)
@@ -421,6 +456,7 @@ class PicoVectorDB:
                 self._dirty = True
             return removed
 
+    @_timed("query")
     def query(
         self,
         query_vecs: np.ndarray,
@@ -605,6 +641,82 @@ class PicoVectorDB:
                 results_batch.append(results)
             return results_batch[0] if is_single else results_batch
 
+    def query_one(
+        self,
+        query_vec: np.ndarray,
+        top_k: int = 10,
+        better_than: Optional[float] = None,
+        where: Optional[Callable[[dict[str, Any]], bool]] = None,
+        ids: Optional[list[str]] = None,
+        ef_search: Optional[int] = None,
+    ) -> list[dict[str, Any]]:
+        """Convenience method for single-vector queries."""
+        return self.query(  # type: ignore[return-value]
+            query_vec,
+            top_k=top_k,
+            better_than=better_than,
+            where=where,
+            ids=ids,
+            ef_search=ef_search,
+        )
+
+    def stats(self) -> dict[str, Any]:
+        """Return a dictionary with database statistics."""
+        with self._rwlock.read_lock():
+            active = self.count()
+            total = self.capacity()
+            deleted = total - active
+            file_sizes = {}
+            for path_fn in [_ids_path, _meta_path, _vecs_path]:
+                p = path_fn(self._path)
+                try:
+                    if os.path.exists(p):
+                        file_sizes[os.path.basename(p)] = os.path.getsize(p)
+                except OSError:
+                    pass
+            faiss_path = _vecs_path(self._path) + ".faiss"
+            if os.path.exists(faiss_path):
+                try:
+                    file_sizes[os.path.basename(faiss_path)] = os.path.getsize(
+                        faiss_path
+                    )
+                except OSError:
+                    pass
+
+            return {
+                "active": active,
+                "deleted": deleted,
+                "total": total,
+                "dim": self.dim,
+                "faiss": self._faiss is not None,
+                "memmap": self._use_memmap,
+                "file_sizes": file_sizes,
+            }
+
+    def vacuum(self) -> None:
+        """
+        Compacts the database by removing deleted entries and rebuilding indices.
+        """
+        with self._rwlock.write_lock():
+            if not self._free:
+                return  # No deleted items to vacuum
+
+            # Filter out deleted entries
+            active_indices = sorted(self._id2idx.values())
+            self._vectors = self._vectors[active_indices]
+            self._ids = [self._ids[i] for i in active_indices]
+            self._docs = [self._docs[i] for i in active_indices]
+
+            # Rebuild mappings
+            self._id2idx = {id: i for i, id in enumerate(self._ids)}
+            self._active_indices = np.arange(len(self._ids), dtype=np.int64)
+            self._free = []
+
+            # Rebuild FAISS index if it exists
+            if self._faiss is not None:
+                self._rebuild_faiss()
+                self._dirty = False
+
     def rebuild_index(self) -> None:
         """Rebuild the FAISS index immediately if present."""
         with self._rwlock.write_lock():
@@ -616,6 +728,7 @@ class PicoVectorDB:
     # Internals
     # ------------------------------------------------------------------
 
+    @_timed("rebuild_faiss")
     def _rebuild_faiss(self) -> None:
         if self._faiss is None:
             return

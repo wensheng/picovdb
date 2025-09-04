@@ -3,4 +3,5 @@ from .pico_vdb import (
     K_METRICS as K_METRICS,
     K_ID as K_ID,
     K_VECTOR as K_VECTOR,
+    _HAS_FAISS as _HAS_FAISS,
 )
