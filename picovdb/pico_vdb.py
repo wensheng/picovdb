@@ -243,7 +243,8 @@ class PicoVectorDB:
 
     def save(self) -> None:
         """
-        Persist the current state of the database, overwrite existing files.
+        Persist the current state of the database atomically, overwriting existing files.
+        Writes to temporary files and replaces them to avoid corruption.
         """
         with self._rwlock.write_lock():
             ids_file, vecs_file, meta_file = (
@@ -251,26 +252,66 @@ class PicoVectorDB:
                 _vecs_path(self._path),
                 _meta_path(self._path),
             )
-            # ids quick‑load file --------------------------------------------------
-            with open(ids_file, "w", encoding="utf‑8") as f:
-                json.dump(self._ids, f, ensure_ascii=False)
-            # vectors -------------------------------------------------------------
-            np.save(vecs_file, self._vectors)
-            if self._faiss:
-                if self._dirty:
-                    # Ensure on-disk index reflects current vectors
-                    self._rebuild_faiss()
-                    self._dirty = False
-                faiss.write_index(self._faiss, vecs_file + ".faiss")
-            # full metadata -------------------------------------------------------
-            meta_json = {
-                "embedding_dim": self.dim,
-                "data": self._docs,
-                "additional_data": self._additional,
-            }
-            with open(meta_file, "w", encoding="utf‑8") as f:
-                json.dump(meta_json, f, ensure_ascii=False)
-            logger.info("Saved %d vectors", len(self._ids))
+            # Use temporary files for atomic writes
+            tmp_ids_file = f"{ids_file}.tmp"
+            tmp_vecs_file_base = f"{self._path}.vecs.tmp"  # No .npy extension
+            tmp_vecs_file = f"{tmp_vecs_file_base}.npy"
+            tmp_meta_file = f"{meta_file}.tmp"
+            faiss_file = f"{vecs_file}.faiss"
+            tmp_faiss_file = f"{faiss_file}.tmp"
+
+            try:
+                # ids quick‑load file --------------------------------------------------
+                with open(tmp_ids_file, "w", encoding="utf‑8") as f:
+                    json.dump(self._ids, f, ensure_ascii=False)
+
+                # vectors -------------------------------------------------------------
+                np.save(tmp_vecs_file_base, self._vectors)  # np.save adds .npy
+                if self._faiss:
+                    if self._dirty:
+                        # Ensure on-disk index reflects current vectors
+                        self._rebuild_faiss()
+                        self._dirty = False
+                    faiss.write_index(self._faiss, tmp_faiss_file)
+
+                # full metadata -------------------------------------------------------
+                meta_json = {
+                    "embedding_dim": self.dim,
+                    "data": self._docs,
+                    "additional_data": self._additional,
+                }
+                with open(tmp_meta_file, "w", encoding="utf‑8") as f:
+                    json.dump(meta_json, f, ensure_ascii=False)
+
+                # Atomically replace old files with new ones
+                os.replace(tmp_ids_file, ids_file)
+                os.replace(tmp_vecs_file, vecs_file)
+                os.replace(tmp_meta_file, meta_file)
+                if self._faiss and os.path.exists(tmp_faiss_file):
+                    os.replace(tmp_faiss_file, faiss_file)
+
+                logger.info("Saved %d vectors", len(self._ids))
+            finally:
+                # Clean up temporary files in case of an error
+                for tmp_file in [
+                    tmp_ids_file,
+                    tmp_vecs_file,
+                    tmp_meta_file,
+                    tmp_faiss_file,
+                ]:
+                    if os.path.exists(tmp_file):
+                        try:
+                            os.remove(tmp_file)
+                        except OSError:
+                            pass
+
+    def flush(self) -> None:
+        """
+        If using memmap, flushes changes to disk. No-op otherwise.
+        """
+        with self._rwlock.read_lock():
+            if self._use_memmap and isinstance(self._vectors, np.memmap):
+                self._vectors.flush()
 
     def upsert(self, items: list[dict[str, Any]]) -> dict[str, list[str]]:
         """---------------------------------------------------------------------

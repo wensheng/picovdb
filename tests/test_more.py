@@ -1,5 +1,6 @@
 import os
 import logging
+import unittest.mock
 
 import numpy as np
 import pytest
@@ -231,3 +232,62 @@ def test_memmap_append_warning(tmp_path, caplog):
         caplog.clear()
         db2.upsert([{K_ID: "a", K_VECTOR: [5.0, 6.0]}])
         assert "Appending to a memmapped file" not in caplog.text
+
+def test_flush_with_memmap(tmp_path):
+    """Verify that flush() persists changes for memmapped DBs."""
+    db_path = str(tmp_path / "test_db")
+    db = PicoVectorDB(embedding_dim=2, storage_file=db_path, use_memmap=True)
+    
+    # Initial upsert and save to create the memmap file
+    db.upsert([{K_ID: "a", K_VECTOR: [1.0, 2.0]}])
+    db.save()
+
+    # Re-load to ensure memmap is used
+    db2 = PicoVectorDB(embedding_dim=2, storage_file=db_path, use_memmap=True)
+    assert isinstance(db2._vectors, np.memmap)
+    
+    # Update a vector, which should modify the memmap file in place
+    db2.upsert([{K_ID: "a", K_VECTOR: [3.0, 4.0]}])
+    
+    # Load into a third instance - might not see the new data yet depending on OS caching
+    # So we flush to be sure.
+    db2.flush()
+    
+    # Load into a new instance to check if the flushed data is there
+    db3 = PicoVectorDB(embedding_dim=2, storage_file=db_path, use_memmap=True)
+    retrieved = db3.get_by_id("a", include_vector=True)
+    assert retrieved is not None
+    np.testing.assert_allclose(retrieved[K_VECTOR], np.array([0.6, 0.8], dtype=np.float32), rtol=1e-6)
+
+    # Test no-op for non-memmap
+    db_non_memmap_path = str(tmp_path / "test_db_non_memmap")
+    db_non_memmap = PicoVectorDB(embedding_dim=2, storage_file=db_non_memmap_path, use_memmap=False)
+    db_non_memmap.upsert([{K_ID: "a", K_VECTOR: [1.0, 2.0]}])
+    db_non_memmap.flush() # Should not raise an error
+    # Not saved, so a new instance should be empty
+    db_non_memmap2 = PicoVectorDB(embedding_dim=2, storage_file=db_non_memmap_path, use_memmap=False)
+    assert len(db_non_memmap2) == 0
+
+def test_atomic_save(tmp_path):
+    """Verify that save() is atomic and doesn't corrupt files on failure."""
+    db_path = str(tmp_path / "test_db")
+    db = PicoVectorDB(embedding_dim=2, storage_file=db_path)
+    db.upsert([{K_ID: "a", K_VECTOR: [1.0, 2.0]}])
+    db.save()
+
+    # Now, make another change
+    db.upsert([{K_ID: "b", K_VECTOR: [3.0, 4.0]}])
+    
+    # Simulate a failure during save (e.g., disk full)
+    with unittest.mock.patch("os.replace", side_effect=OSError("Disk full")):
+        with pytest.raises(OSError):
+            db.save()
+
+    # Check that temporary files are cleaned up
+    assert not any(str(f).endswith(".tmp") for f in tmp_path.iterdir())
+
+    # Load the database again and check that it has the old data, not the corrupted new data
+    db2 = PicoVectorDB(embedding_dim=2, storage_file=db_path)
+    assert len(db2) == 1
+    assert db2.get_by_id("a") is not None
+    assert db2.get_by_id("b") is None
