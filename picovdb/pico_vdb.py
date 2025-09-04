@@ -195,7 +195,17 @@ class PicoVectorDB:
             new_vecs, new_ids, new_docs = [], [], []
             new_active: list[int] = []
             for item in items:
-                vec = _normalize(np.asarray(item[K_VECTOR], dtype=Float))
+                # Coerce and validate vector shape
+                vec_raw = np.ascontiguousarray(item[K_VECTOR], dtype=Float)
+                if vec_raw.ndim != 1:
+                    raise ValueError(
+                        f"upsert vector must be 1D with length {self.dim}; got shape {tuple(vec_raw.shape)}"
+                    )
+                if vec_raw.shape[0] != self.dim:
+                    raise ValueError(
+                        f"upsert vector dim mismatch: expected {self.dim}, got {vec_raw.shape[0]}"
+                    )
+                vec = _normalize(vec_raw)
                 meta = {k: v for k, v in item.items() if k != K_VECTOR}
                 item_id = meta.get(K_ID) if meta.get(K_ID) is not None else _hash_vec(vec)
                 meta[K_ID] = item_id
@@ -287,8 +297,24 @@ class PicoVectorDB:
             # Query
             """
             # prepare empty batch result if no vectors
-            raw = np.asarray(query_vecs, dtype=Float)
-            is_single = raw.ndim == 1
+            raw = np.ascontiguousarray(query_vecs, dtype=Float)
+            # Validate input shape: 1D (dim,) or 2D (batch, dim)
+            if raw.ndim == 1:
+                if raw.shape[0] != self.dim:
+                    raise ValueError(
+                        f"query vector dim mismatch: expected {self.dim}, got {raw.shape[0]}"
+                    )
+                is_single = True
+            elif raw.ndim == 2:
+                if raw.shape[1] != self.dim:
+                    raise ValueError(
+                        f"query vectors dim mismatch: expected last dim {self.dim}, got {raw.shape[1]}"
+                    )
+                is_single = False
+            else:
+                raise ValueError(
+                    f"query expects 1D or 2D array with last dim {self.dim}; got shape {tuple(raw.shape)}"
+                )
             vecs = raw[None, :] if is_single else raw
             num_q = vecs.shape[0]
             if not self._id2idx:
