@@ -394,31 +394,57 @@ class PicoVectorDB:
     def __len__(self) -> int:
         return len(self._id2idx)
 
-    def get(self, ids: list[str]) -> list[dict[str, Any]]:
-        """ Get vectors by IDs, return list of dicts with metadata and vector. """
+    def get(self, ids: list[str], include_vector: bool = False) -> list[dict[str, Any]]:
+        """
+        Get records by IDs.
+
+        Returns metadata by default; when `include_vector=True`, also include `_vector_`.
+        """
         with self._lock:
             out = []
             for _id in ids:
                 idx = self._id2idx.get(_id)
                 if idx is not None:
-                    out.append(self._docs[idx] or {K_ID: _id})
+                    meta = self._docs[idx] or {K_ID: _id}
+                    rec = dict(meta)
+                    if include_vector:
+                        rec[K_VECTOR] = self._vectors[idx].copy()
+                    out.append(rec)
             return out
 
-    def get_by_id(self, sid: str) -> Optional[dict[str, Any]]:
-        """ Get vector by ID, return dict with metadata and vector. """
+    def get_by_id(self, sid: str, include_vector: bool = False) -> Optional[dict[str, Any]]:
+        """
+        Get a single record by ID.
+
+        Returns metadata by default; when `include_vector=True`, also include `_vector_`.
+        """
         with self._lock:
             idx = self._id2idx.get(sid)
             if idx is not None:
-                return self._docs[idx] or {K_ID: sid}
+                meta = self._docs[idx] or {K_ID: sid}
+                rec = dict(meta)
+                if include_vector:
+                    rec[K_VECTOR] = self._vectors[idx].copy()
+                return rec
             return None
 
-    def get_all(self) -> list[dict[str, Any]]:
-        """ Get all vectors, return list of dicts with metadata and vector. """
+    def get_all(self, include_vector: bool = False) -> list[dict[str, Any]]:
+        """
+        Get all records.
+
+        Returns metadata by default; when `include_vector=True`, also include `_vector_` for active records.
+        """
         with self._lock:
             docs = []
             for _id, doc in zip(self._ids, self._docs):
                 if doc is not None:
-                    docs.append(doc | {K_ID: _id})
+                    rec = dict(doc)
+                    rec[K_ID] = _id
+                    if include_vector:
+                        idx = self._id2idx[_id]
+                        rec[K_VECTOR] = self._vectors[idx].copy()
+                    docs.append(rec)
                 else:
+                    # deleted placeholder
                     docs.append({K_ID: _id})
             return docs
