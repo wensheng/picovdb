@@ -323,92 +323,95 @@ class PicoVectorDB:
         better_than: Optional[float] = None,
         where: Optional[Callable[[dict[str, Any]], bool]] = None,
     ) -> Union[list[list[dict[str, Any]]], list[dict[str, Any]]]:
-        with self._rwlock.read_lock():
-            """---------------------------------------------------------------------
-            # Query
-            """
-            # prepare empty batch result if no vectors
-            raw = np.ascontiguousarray(query_vecs, dtype=Float)
-            # Validate input shape: 1D (dim,) or 2D (batch, dim)
-            if raw.ndim == 1:
-                if raw.shape[0] != self.dim:
-                    raise ValueError(
-                        f"query vector dim mismatch: expected {self.dim}, got {raw.shape[0]}"
-                    )
-                is_single = True
-            elif raw.ndim == 2:
-                if raw.shape[1] != self.dim:
-                    raise ValueError(
-                        f"query vectors dim mismatch: expected last dim {self.dim}, got {raw.shape[1]}"
-                    )
-                is_single = False
-            else:
+        """Query the database.
+
+        For the NumPy path, snapshots read-only references under the read lock and releases
+        the lock before heavy math to improve concurrency. For the FAISS path, keeps the
+        read lock held to avoid concurrent mutation of the index during search.
+        """
+        # Prepare and validate input first (no lock needed)
+        raw = np.ascontiguousarray(query_vecs, dtype=Float)
+        if raw.ndim == 1:
+            if raw.shape[0] != self.dim:
                 raise ValueError(
-                    f"query expects 1D or 2D array with last dim {self.dim}; got shape {tuple(raw.shape)}"
+                    f"query vector dim mismatch: expected {self.dim}, got {raw.shape[0]}"
                 )
-            vecs = raw[None, :] if is_single else raw
-            num_q = vecs.shape[0]
+            is_single = True
+        elif raw.ndim == 2:
+            if raw.shape[1] != self.dim:
+                raise ValueError(
+                    f"query vectors dim mismatch: expected last dim {self.dim}, got {raw.shape[1]}"
+                )
+            is_single = False
+        else:
+            raise ValueError(
+                f"query expects 1D or 2D array with last dim {self.dim}; got shape {tuple(raw.shape)}"
+            )
+        vecs = raw[None, :] if is_single else raw
+        num_q = vecs.shape[0]
+        # Normalize queries (no lock)
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        zero_mask = norms.squeeze(-1) == 0
+        if np.any(zero_mask):
+            vecs = vecs.copy()
+            vecs[zero_mask] = 0
+            vecs[zero_mask, 0] = 1.0
+            norms = np.where(zero_mask[:, None], 1.0, norms)
+        vecs = (vecs / norms).astype(Float, copy=False)
+
+        # Snapshot under read lock
+        with self._rwlock.read_lock():
             if not self._id2idx:
                 return [[] for _ in range(num_q)]
-            # normalize each query vector
-            # batch normalize without Python loop
-            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-            # For zero vectors, set to a deterministic unit vector on first axis
-            zero_mask = norms.squeeze(-1) == 0
-            if np.any(zero_mask):
-                vecs = vecs.copy()
-                vecs[zero_mask] = 0
-                vecs[zero_mask, 0] = 1.0
-                norms = np.where(zero_mask[:, None], 1.0, norms)
-            vecs = (vecs / norms).astype(Float, copy=False)
-            # compute scores and indices batch-wise
-            if self._faiss is not None:
+            use_faiss = self._faiss is not None
+            if use_faiss:
+                # Run FAISS search under lock for safety
                 self._faiss.hnsw.efSearch = HNSW_EFS
                 scores_batch, idxs_batch = self._faiss.search(vecs, top_k)
+                ids_ref = self._ids
+                docs_ref = self._docs
             else:
-                # Use only active (non-deleted) rows for scoring without copying (avoid large fancy-indexed candidate matrix)
-                active_idx = self._active_indices
-                if active_idx.size == 0:
-                    return [[] for _ in range(num_q)]
-                # Compute full scores then slice active columns; cheaper than slicing vectors first
-                scores_full = vecs @ self._vectors.T  # shape (num_q, N)
-                scores_act = scores_full[:, active_idx]  # shape (num_q, M_active)
-                k_eff = min(top_k, scores_act.shape[1])
-                # partial top-k indices per query along axis=1 (local to active set)
-                idxs_part_local = np.argpartition(scores_act, -k_eff, axis=1)[:, -k_eff:]
-                # gather scores for those local indices
-                scores_part = np.take_along_axis(scores_act, idxs_part_local, axis=1)
-                # sort within top-k
-                order = np.argsort(-scores_part, axis=1)
-                # local indices ordered by score
-                idxs_batch_local = np.take_along_axis(idxs_part_local, order, axis=1)
-                scores_batch = np.take_along_axis(scores_part, order, axis=1)
-                # map local active positions back to global row indices
-                idxs_batch = active_idx[idxs_batch_local]
-            # build results for each query
-            results_batch: list[list[dict[str, Any]]] = []
-            for qi in range(num_q):
-                idxs = idxs_batch[qi]
-                scores = scores_batch[qi]
-                results: list[dict[str, Any]] = []
-                for idx, score in zip(idxs, scores):
-                    if idx < 0 or idx >= len(self._ids):
-                        continue
-                    # Skip deleted entries (doc is None)
-                    doc = self._docs[idx]
-                    if doc is None:
-                        continue
-                    doc_id = self._ids[idx]
-                    if better_than is not None and score < better_than:
-                        continue
-                    meta = doc
-                    if where and not where(meta):
-                        continue
-                    results.append({**meta, K_METRICS: float(score)})
-                    if len(results) == top_k:
-                        break
-                results_batch.append(results)
-            return results_batch[0] if is_single else results_batch
+                vectors_ref = self._vectors
+                active_idx = self._active_indices.copy()
+                ids_ref = list(self._ids)
+                docs_ref = list(self._docs)
+
+        if not use_faiss:
+            # Heavy math outside locks (NumPy path)
+            if active_idx.size == 0:
+                return [[] for _ in range(num_q)]
+            scores_full = vecs @ vectors_ref.T  # (num_q, N)
+            scores_act = scores_full[:, active_idx]
+            k_eff = min(top_k, scores_act.shape[1])
+            idxs_part_local = np.argpartition(scores_act, -k_eff, axis=1)[:, -k_eff:]
+            scores_part = np.take_along_axis(scores_act, idxs_part_local, axis=1)
+            order = np.argsort(-scores_part, axis=1)
+            idxs_batch_local = np.take_along_axis(idxs_part_local, order, axis=1)
+            scores_batch = np.take_along_axis(scores_part, order, axis=1)
+            idxs_batch = active_idx[idxs_batch_local]
+
+        # Build results without lock using snapshots
+        results_batch: list[list[dict[str, Any]]] = []
+        for qi in range(num_q):
+            idxs = idxs_batch[qi]
+            scores = scores_batch[qi]
+            results: list[dict[str, Any]] = []
+            for idx, score in zip(idxs, scores):
+                if idx < 0 or idx >= len(ids_ref):
+                    continue
+                doc = docs_ref[idx]
+                if doc is None:
+                    continue
+                if better_than is not None and score < better_than:
+                    continue
+                meta = doc
+                if where and not where(meta):
+                    continue
+                results.append({**meta, K_METRICS: float(score)})
+                if len(results) == top_k:
+                    break
+            results_batch.append(results)
+        return results_batch[0] if is_single else results_batch
 
     # ------------------------------------------------------------------
     # Internals
