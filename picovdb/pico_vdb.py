@@ -106,6 +106,8 @@ class PicoVectorDB:
             self._faiss.hnsw.efConstruction = HNSW_EFC
         else:
             self._faiss = None
+        # dirty flag for lazy FAISS rebuilds
+        self._dirty: bool = False
 
         self._load_or_init()
 
@@ -157,12 +159,14 @@ class PicoVectorDB:
                     self._faiss = faiss.read_index(vecs_file + ".faiss")
                 else:
                     self._rebuild_faiss()
+                self._dirty = False
             logger.info("Loaded %d active / %d total vectors", len(self._id2idx), count)
         else:
             self._ids, self._docs = [], []
             self._vectors = np.empty((0, self.dim), dtype=Float)
             self._active_indices = np.empty(0, dtype=np.int64)
             logger.info("No persisted data – fresh DB")
+            self._dirty = False
 
     def size(self) -> int:
         """
@@ -206,6 +210,10 @@ class PicoVectorDB:
             # vectors -------------------------------------------------------------
             np.save(vecs_file, self._vectors)
             if self._faiss:
+                if self._dirty:
+                    # Ensure on-disk index reflects current vectors
+                    self._rebuild_faiss()
+                    self._dirty = False
                 faiss.write_index(self._faiss, vecs_file + ".faiss")
             # full metadata -------------------------------------------------------
             meta_json = {
@@ -277,7 +285,7 @@ class PicoVectorDB:
                 else:
                     self._active_indices = np.asarray(new_active, dtype=np.int64)
             if self._faiss is not None:
-                self._rebuild_faiss()
+                self._dirty = True
             return report
 
     def store_additional_data(self, **kwargs) -> None:
@@ -313,7 +321,7 @@ class PicoVectorDB:
                 mask = ~np.isin(self._active_indices, to_remove)
                 self._active_indices = self._active_indices[mask]
             if removed and self._faiss is not None:
-                self._rebuild_faiss()
+                self._dirty = True
             return removed
 
     def query(
@@ -364,17 +372,19 @@ class PicoVectorDB:
             if not self._id2idx:
                 return [[] for _ in range(num_q)]
             use_faiss = self._faiss is not None
-            if use_faiss:
-                # Run FAISS search under lock for safety
-                self._faiss.hnsw.efSearch = HNSW_EFS
-                scores_batch, idxs_batch = self._faiss.search(vecs, top_k)
-                ids_ref = self._ids
-                docs_ref = self._docs
-            else:
+            needs_rebuild = use_faiss and self._dirty
+            if not use_faiss:
                 vectors_ref = self._vectors
                 active_idx = self._active_indices.copy()
                 ids_ref = list(self._ids)
                 docs_ref = list(self._docs)
+
+        if use_faiss and needs_rebuild:
+            # Upgrade to write lock to rebuild FAISS lazily
+            with self._rwlock.write_lock():
+                if self._faiss is not None and self._dirty:
+                    self._rebuild_faiss()
+                    self._dirty = False
 
         if not use_faiss:
             # Heavy math outside locks (NumPy path)
@@ -390,28 +400,64 @@ class PicoVectorDB:
             scores_batch = np.take_along_axis(scores_part, order, axis=1)
             idxs_batch = active_idx[idxs_batch_local]
 
-        # Build results without lock using snapshots
-        results_batch: list[list[dict[str, Any]]] = []
-        for qi in range(num_q):
-            idxs = idxs_batch[qi]
-            scores = scores_batch[qi]
-            results: list[dict[str, Any]] = []
-            for idx, score in zip(idxs, scores):
-                if idx < 0 or idx >= len(ids_ref):
-                    continue
-                doc = docs_ref[idx]
-                if doc is None:
-                    continue
-                if better_than is not None and score < better_than:
-                    continue
-                meta = doc
-                if where and not where(meta):
-                    continue
-                results.append({**meta, K_METRICS: float(score)})
-                if len(results) == top_k:
-                    break
-            results_batch.append(results)
-        return results_batch[0] if is_single else results_batch
+        if use_faiss:
+            # Perform FAISS search and build results under read lock
+            with self._rwlock.read_lock():
+                self._faiss.hnsw.efSearch = HNSW_EFS
+                scores_batch, idxs_batch = self._faiss.search(vecs, top_k)
+                ids_ref = self._ids
+                docs_ref = self._docs
+                results_batch: list[list[dict[str, Any]]] = []
+                for qi in range(num_q):
+                    idxs = idxs_batch[qi]
+                    scores = scores_batch[qi]
+                    results: list[dict[str, Any]] = []
+                    for idx, score in zip(idxs, scores):
+                        if idx < 0 or idx >= len(ids_ref):
+                            continue
+                        doc = docs_ref[idx]
+                        if doc is None:
+                            continue
+                        if better_than is not None and score < better_than:
+                            continue
+                        meta = doc
+                        if where and not where(meta):
+                            continue
+                        results.append({**meta, K_METRICS: float(score)})
+                        if len(results) == top_k:
+                            break
+                    results_batch.append(results)
+                return results_batch[0] if is_single else results_batch
+        else:
+            # Build results without lock using snapshots (NumPy path)
+            results_batch: list[list[dict[str, Any]]] = []
+            for qi in range(num_q):
+                idxs = idxs_batch[qi]
+                scores = scores_batch[qi]
+                results: list[dict[str, Any]] = []
+                for idx, score in zip(idxs, scores):
+                    if idx < 0 or idx >= len(ids_ref):
+                        continue
+                    doc = docs_ref[idx]
+                    if doc is None:
+                        continue
+                    if better_than is not None and score < better_than:
+                        continue
+                    meta = doc
+                    if where and not where(meta):
+                        continue
+                    results.append({**meta, K_METRICS: float(score)})
+                    if len(results) == top_k:
+                        break
+                results_batch.append(results)
+            return results_batch[0] if is_single else results_batch
+
+    def rebuild_index(self) -> None:
+        """Rebuild the FAISS index immediately if present."""
+        with self._rwlock.write_lock():
+            if self._faiss is not None:
+                self._rebuild_faiss()
+                self._dirty = False
 
     # ------------------------------------------------------------------
     # Internals
