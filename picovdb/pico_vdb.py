@@ -160,8 +160,16 @@ class PicoVectorDB:
             self._active_indices = np.empty(0, dtype=np.int64)
             logger.info("No persisted data – fresh DB")
 
-    def size(self) -> int:
+    def capacity(self) -> int:
+        """
+        Returns total slots (including deleted placeholders).
+        Use `count()` for active item count.
+        """
         return len(self._ids)
+
+    def count(self) -> int:
+        """Return the number of active (non-deleted) items."""
+        return len(self._id2idx)
 
     def save(self) -> None:
         """
