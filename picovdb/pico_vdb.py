@@ -5,8 +5,11 @@ import os
 import json
 import hashlib
 import logging
+import warnings
 from typing import Any, Callable, Literal, Optional, Union
 from threading import RLock
+import threading
+from contextlib import contextmanager
 
 import numpy as np
 # optional FAISS --------------------------------------------------------------
@@ -80,6 +83,7 @@ class PicoVectorDB:
     ) -> None:
         # Initialize RWLock for thread safety
         self._lock = RLock()
+        self._rwlock = _RWLock()
         self.dim = embedding_dim
         self.metric = metric
         self._path = storage_file
@@ -160,6 +164,18 @@ class PicoVectorDB:
             self._active_indices = np.empty(0, dtype=np.int64)
             logger.info("No persisted data – fresh DB")
 
+    def size(self) -> int:
+        """
+        Deprecated: returns total slots (including deleted placeholders).
+        Use `count()` for active item count. A `capacity()` method will be provided later.
+        """
+        warnings.warn(
+            "size() is deprecated: use count() for active items; capacity() will be added in a future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return len(self._ids)
+
     def capacity(self) -> int:
         """
         Returns total slots (including deleted placeholders).
@@ -175,7 +191,7 @@ class PicoVectorDB:
         """
         Persist the current state of the database, overwrite existing files.
         """
-        with self._lock:
+        with self._rwlock.write_lock():
             ids_file, vecs_file, meta_file = (
                 _ids_path(self._path),
                 _vecs_path(self._path),
@@ -202,7 +218,7 @@ class PicoVectorDB:
         """---------------------------------------------------------------------
         # Mutators
         """
-        with self._lock:
+        with self._rwlock.write_lock():
             report : dict[str, list[str]] = {"update": [], "insert": []}
             new_vecs, new_ids, new_docs = [], [], []
             new_active: list[int] = []
@@ -267,16 +283,17 @@ class PicoVectorDB:
         This data is not used for vector search, but can be useful for storing
         other information related to the vectors.
         """
-        with self._lock:
+        with self._rwlock.write_lock():
             self._additional.update(kwargs)
 
     def get_additional_data(self) -> dict[str, Any]:
         """Get additional data stored in the metadata file."""
-        return self._additional
+        with self._rwlock.read_lock():
+            return self._additional
 
     def delete(self, ids: list[str]) -> list[str]:
         """ Delete vectors by IDs, return deleted IDs."""
-        with self._lock:
+        with self._rwlock.write_lock():
             removed = []
             removed_idxs: list[int] = []
             for _id in ids:
@@ -303,7 +320,7 @@ class PicoVectorDB:
         better_than: Optional[float] = None,
         where: Optional[Callable[[dict[str, Any]], bool]] = None,
     ) -> Union[list[list[dict[str, Any]]], list[dict[str, Any]]]:
-        with self._lock:
+        with self._rwlock.read_lock():
             """---------------------------------------------------------------------
             # Query
             """
@@ -402,7 +419,8 @@ class PicoVectorDB:
             self._faiss.add(self._vectors)
 
     def __len__(self) -> int:
-        return len(self._id2idx)
+        with self._rwlock.read_lock():
+            return len(self._id2idx)
 
     def get(self, ids: list[str], include_vector: bool = False) -> list[dict[str, Any]]:
         """
@@ -410,7 +428,7 @@ class PicoVectorDB:
 
         Returns metadata by default; when `include_vector=True`, also include `_vector_`.
         """
-        with self._lock:
+        with self._rwlock.read_lock():
             out = []
             for _id in ids:
                 idx = self._id2idx.get(_id)
@@ -428,7 +446,7 @@ class PicoVectorDB:
 
         Returns metadata by default; when `include_vector=True`, also include `_vector_`.
         """
-        with self._lock:
+        with self._rwlock.read_lock():
             idx = self._id2idx.get(sid)
             if idx is not None:
                 meta = self._docs[idx] or {K_ID: sid}
@@ -445,7 +463,7 @@ class PicoVectorDB:
         Returns metadata by default; when `include_vector=True`, also include `_vector_` for active records.
         By default returns only active (non-deleted) records; set `include_deleted=True` to include deleted placeholders.
         """
-        with self._lock:
+        with self._rwlock.read_lock():
             docs = []
             if include_deleted:
                 # include all slots, with placeholders for deleted
@@ -472,3 +490,52 @@ class PicoVectorDB:
                         rec[K_VECTOR] = self._vectors[idx].copy()
                     docs.append(rec)
             return docs
+# -----------------------------------------------------------------------------
+# Concurrency
+# -----------------------------------------------------------------------------
+
+class _RWLock:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
+        self._readers = 0
+        self._writer = False
+
+    @contextmanager
+    def read_lock(self):
+        self.acquire_read()
+        try:
+            yield
+        finally:
+            self.release_read()
+
+    @contextmanager
+    def write_lock(self):
+        self.acquire_write()
+        try:
+            yield
+        finally:
+            self.release_write()
+
+    def acquire_read(self) -> None:
+        with self._cond:
+            while self._writer:
+                self._cond.wait()
+            self._readers += 1
+
+    def release_read(self) -> None:
+        with self._cond:
+            self._readers -= 1
+            if self._readers == 0:
+                self._cond.notify_all()
+
+    def acquire_write(self) -> None:
+        with self._cond:
+            while self._writer or self._readers > 0:
+                self._cond.wait()
+            self._writer = True
+
+    def release_write(self) -> None:
+        with self._cond:
+            self._writer = False
+            self._cond.notify_all()
