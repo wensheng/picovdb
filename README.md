@@ -66,7 +66,7 @@ Hardware: M3 MacBook Air
 2. With FAISS(cpu):
    - Inserting `100,000` vectors took `110`s
    - Doing 100 queries from `100,000` vectors took `0.05`s (`0.0005`s or `0.5 millisecond` per quiry).
-   - Doing 1000 queries from `100,000` vectors in batch mode took `0.2`s (`0.0002`s or `0.2 millisecond` per quiry).
+   - Doing 1000 queries from `100,000` vectors in batch mode took `0.1`s (`0.0001`s or `0.1 millisecond` per quiry).
 
 Hardware: PC with CPU Core i7-12700k and old-gen M2 Nvme SSD
 

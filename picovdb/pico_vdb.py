@@ -102,8 +102,9 @@ class PicoVectorDB:
         # faiss index ---------------------------------------------------------
         # self._faiss = faiss.IndexFlatIP(self.dim) if _HAS_FAISS else None
         if _HAS_FAISS and not no_faiss:
-            self._faiss = faiss.IndexHNSWFlat(self.dim, HNSW_M, faiss.METRIC_INNER_PRODUCT)
-            self._faiss.hnsw.efConstruction = HNSW_EFC
+            base = faiss.IndexHNSWFlat(self.dim, HNSW_M, faiss.METRIC_INNER_PRODUCT)
+            base.hnsw.efConstruction = HNSW_EFC
+            self._faiss = faiss.IndexIDMap2(base)
         else:
             self._faiss = None
         # dirty flag for lazy FAISS rebuilds
@@ -403,7 +404,10 @@ class PicoVectorDB:
         if use_faiss:
             # Perform FAISS search and build results under read lock
             with self._rwlock.read_lock():
-                self._faiss.hnsw.efSearch = HNSW_EFS
+                try:
+                    self._faiss.index.hnsw.efSearch = HNSW_EFS  # type: ignore[attr-defined]
+                except Exception:
+                    pass
                 scores_batch, idxs_batch = self._faiss.search(vecs, top_k)
                 ids_ref = self._ids
                 docs_ref = self._docs
@@ -466,9 +470,17 @@ class PicoVectorDB:
     def _rebuild_faiss(self) -> None:
         if self._faiss is None:
             return
+        # Reset and add only active vectors with global row indices as FAISS IDs
         self._faiss.reset()
         if self._vectors.size:
-            self._faiss.add(self._vectors)
+            active_idx = self._active_indices
+            if active_idx.size:
+                vecs = self._vectors[active_idx]
+                ids = active_idx.astype(np.int64)
+                # ensure inner HNSW search params are set
+                if hasattr(self._faiss, "index") and hasattr(self._faiss.index, "hnsw"):
+                    self._faiss.index.hnsw.efConstruction = HNSW_EFC
+                self._faiss.add_with_ids(vecs, ids)
 
     def __len__(self) -> int:
         with self._rwlock.read_lock():
