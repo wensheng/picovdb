@@ -1,3 +1,7 @@
+[project]
+name = "picovdb"
+version = "0.2.0"
+
 [project.urls]
 #Homepage = "https://example.com"
 #Documentation = "https://readthedocs.org"
@@ -6,10 +10,8 @@ Repository = "https://github.com/wensheng/picovdb.git"
 #Changelog = "https://github.com/wensheng/picovdb/blob/master/CHANGELOG.md"
 
 [tool.poetry]
-name = "picovdb"
-version = "0.1.2"
-description = "A tiny and fast local vector database in Python."
 authors = ["Wensheng Wang <wenshengwang@gmail.com>"]
+description = "A tiny and fast local vector database in Python."
 readme = "README.md"
 
 [tool.poetry.dependencies]
