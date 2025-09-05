@@ -557,8 +557,16 @@ class PicoVectorDB:
                 candidate_ref = candidate_idx.copy()
                 ids_ref = list(ids_view)
                 docs_ref = list(docs_view)
-            scores_full = vecs @ vectors_ref.T  # (num_q, N)
-            scores_act = scores_full[:, candidate_ref]
+            # Pre-slice candidate vectors to avoid full-matrix matmul
+            # Fast path: when no filters and candidates cover all active rows,
+            # avoid building a large copy and use the original full-matrix GEMM.
+            if (ids is None and where is None) and (
+                candidate_ref.size == vectors_ref.shape[0]
+            ):
+                scores_act = vecs @ vectors_ref.T  # (num_q, N)
+            else:
+                vectors_cand = vectors_ref[candidate_ref]
+                scores_act = vecs @ vectors_cand.T  # (num_q, |candidates|)
             # If filters are present, fetch extra candidates to mitigate underfill after filtering
             base = (
                 top_k + ADAPTIVE_BUFFER
