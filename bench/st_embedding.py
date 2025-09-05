@@ -7,7 +7,7 @@ import set_path
 from picovdb import PicoVectorDB
 
 CHUNK_SIZE = 256
-model_name = 'all-MiniLM-L6-v2'
+model_name = "all-MiniLM-L6-v2"
 
 print(f"Loading st model: {model_name} ...")
 model = SentenceTransformer(model_name)
@@ -32,19 +32,21 @@ with open("A_Christmas_Carol.txt", encoding="UTF8") as f:
     db.save()
 
 
-txt = "'I wear the chain I forged in life,' replied the Ghost."
+txt = "ghost said it wear a chain it forged in life."
 emb = model.encode(txt)
 r = db.query(emb, top_k=3)
-print("\nquery result:\n", r[0]["content"])
+print("\nquery:", txt)
+print("\nresult:\n", r[0]["content"])
 
 txts = [
-    "Mankind was my business. The common welfare was my business; charity, mercy, forbearance, and benevolence were, all, my business.",
-    "Are there no prisons? Are there no workhouses?",
+    "my business are mankind and the common welfare",
+    "there are no workhouses aren't there?",
 ]
 emb = model.encode(txts)
 rs = db.query(emb, top_k=5)
-print("\nquery result 0:\n", rs[0][0]["content"])
-print("\nquery result 1:\n", rs[1][1]["content"])
+print("\nqueries:\n", txts)
+print("\nresult 0:\n", rs[0][0]["content"])
+print("\nresult 1:\n", rs[1][1]["content"])
 
 all_docs = db.get_all()
 print(len(all_docs))
