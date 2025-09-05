@@ -19,3 +19,5 @@
 4. numpy_query_profiler.py
    * `python bench/numpy_query_profiler.py --db_sizes "10000,100000,250000"` 
    * profile query speed with different db size 
+   * example:
+     - `python numpy_query_profiler.py --db_sizes 10000,30000 --num_queries 5 --dim 256 --batch_sizes 1,8,32 --top_k 10 --csv out_summary.csv --json out_summary.json`

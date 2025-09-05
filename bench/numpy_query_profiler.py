@@ -4,6 +4,8 @@ import os
 import argparse
 import set_path
 from typing import Callable, Optional
+import json
+import csv
 from picovdb import PicoVectorDB, K_ID, K_VECTOR
 
 # Defaults (overridable by CLI)
@@ -129,9 +131,20 @@ def run_suite(
         # Single-query scenarios
         qs = rng.random((num_queries, DIMENSION), dtype=np.float32)
         scenarios = scenario_generators(db, db_size)
+        # Active docs and IDs for candidate accounting
+        active_docs = db.get_all()
+        active_ids = {rec[K_ID] for rec in active_docs}
+        active_count = len(active_docs)
         print(f"\nDB: {db_size:,} vectors | dim={DIMENSION} | top_k={TOP_K}")
         for name, cfg_fn in scenarios:
             cfg = cfg_fn()
+            # Estimate candidate count pre-score (by filters only)
+            if cfg["ids"] is not None:
+                candidates = sum(1 for _id in cfg["ids"] if _id in active_ids)
+            elif cfg["where"] is not None:
+                candidates = sum(1 for rec in active_docs if cfg["where"](rec))
+            else:
+                candidates = active_count
             times = [
                 time_query(db, qs[i], where_fn=cfg["where"], better_than=cfg["better_than"], ids=cfg["ids"])
                 for i in range(num_queries)
@@ -140,6 +153,19 @@ def run_suite(
             print(
                 f"  {name:18s}  mean={stats['mean_ms']:.3f}ms  p50={stats['p50_ms']:.3f}ms  p95={stats['p95_ms']:.3f}ms  ops/s={stats['ops_sec']:.1f}"
             )
+            yield {
+                "mode": "single",
+                "db_size": db_size,
+                "dim": DIMENSION,
+                "top_k": TOP_K,
+                "scenario": name,
+                "num_queries": num_queries,
+                "batch_size": 1,
+                "active_count": active_count,
+                "candidates": candidates,
+                "cand_frac": (candidates / active_count) if active_count else 0.0,
+                **stats,
+            }
 
         # Batch-query scenarios (2D inputs)
         for b in batch_sizes:
@@ -148,15 +174,59 @@ def run_suite(
             q_batch = rng.random((b, DIMENSION), dtype=np.float32)
             t = time_query(db, q_batch)
             print(f"  batch({b:>4d})        mean={t*1000.0:.3f}ms  per_q={t*1000.0/b:.3f}ms")
+            yield {
+                "mode": "batch",
+                "db_size": db_size,
+                "dim": DIMENSION,
+                "top_k": TOP_K,
+                "scenario": f"batch_{b}",
+                "num_queries": 1,
+                "batch_size": b,
+                "active_count": active_count,
+                "candidates": active_count,
+                "cand_frac": 1.0,
+                "mean_ms": t * 1000.0,
+                "p50_ms": t * 1000.0,  # single measurement
+                "p95_ms": t * 1000.0,
+                "ops_sec": (b / t) if t > 0 else float("inf"),
+            }
     finally:
         cleanup_db_files(base, verbose=verbose)
 
 
-def main(db_sizes_to_test: list[int], num_queries: int, batch_sizes: list[int], verbose: bool):
+def main(db_sizes_to_test: list[int], num_queries: int, batch_sizes: list[int], verbose: bool, csv_path: Optional[str], json_path: Optional[str]):
     print("NumPy Query Path Summary (concise)")
     print("=" * 40)
+    rows: list[dict] = []
     for size in db_sizes_to_test:
-        run_suite(size, num_queries=num_queries, batch_sizes=batch_sizes, verbose=verbose)
+        for row in run_suite(size, num_queries=num_queries, batch_sizes=batch_sizes, verbose=verbose):
+            rows.append(row)
+
+    # Optional exports
+    if csv_path:
+        fieldnames = [
+            "mode",
+            "db_size",
+            "dim",
+            "top_k",
+            "scenario",
+            "num_queries",
+            "batch_size",
+            "mean_ms",
+            "p50_ms",
+            "p95_ms",
+            "ops_sec",
+        ]
+        with open(csv_path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            for r in rows:
+                w.writerow({k: r.get(k) for k in fieldnames})
+        print(f"Wrote CSV: {csv_path}")
+    if json_path:
+        with open(json_path, "w") as f:
+            json.dump(rows, f, indent=2)
+        print(f"Wrote JSON: {json_path}")
 
 
 if __name__ == "__main__":
@@ -182,6 +252,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--top_k", type=int, default=TOP_K, help="Top-k neighbors")
     parser.add_argument("--verbose", action="store_true", help="Verbose setup logs")
+    parser.add_argument("--csv", type=str, default=None, help="Write summary CSV to path")
+    parser.add_argument("--json", type=str, default=None, help="Write summary JSON to path")
     args = parser.parse_args()
 
     # apply CLI overrides
@@ -201,5 +273,5 @@ if __name__ == "__main__":
         print("Invalid --batch_sizes; use comma-separated integers.")
         raise SystemExit(2)
 
-    main(db_sizes_to_test=db_sizes, num_queries=NUM_QUERIES, batch_sizes=batch_sizes, verbose=args.verbose)
+    main(db_sizes_to_test=db_sizes, num_queries=NUM_QUERIES, batch_sizes=batch_sizes, verbose=args.verbose, csv_path=args.csv, json_path=args.json)
     print("\nDone.")
