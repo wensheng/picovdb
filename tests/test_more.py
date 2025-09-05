@@ -66,10 +66,10 @@ def test_upsert_and_len_and_get_by_id(tmp_path):
     assert report["update"] == []
     assert len(db) == 2
 
-    # get_by_id returns correct metadata
-    rec = db.get_by_id("a")
+    # get returns correct metadata
+    rec = db.get("a")
     assert rec["x"] == 1 and rec[K_ID] == "a"
-    rec = db.get_by_id("missing")
+    rec = db.get("missing")
     assert rec is None
 
     # get returns only available ids
@@ -108,7 +108,7 @@ def test_update_on_reupsert(tmp_path):
     report = db.upsert([{K_VECTOR: new_vec, K_ID: "u", "tag": "updated"}])
     assert report["insert"] == []
     assert report["update"] == ["u"]
-    rec = db.get_by_id("u")
+    rec = db.get("u")
     assert rec["tag"] == "updated"
 
 
@@ -255,7 +255,7 @@ def test_flush_with_memmap(tmp_path):
     
     # Load into a new instance to check if the flushed data is there
     db3 = PicoVectorDB(embedding_dim=2, storage_file=db_path, use_memmap=True)
-    retrieved = db3.get_by_id("a", include_vector=True)
+    retrieved = db3.get("a", include_vector=True)
     assert retrieved is not None
     np.testing.assert_allclose(retrieved[K_VECTOR], np.array([0.6, 0.8], dtype=np.float32), rtol=1e-6)
 
@@ -289,5 +289,5 @@ def test_atomic_save(tmp_path):
     # Load the database again and check that it has the old data, not the corrupted new data
     db2 = PicoVectorDB(embedding_dim=2, storage_file=db_path)
     assert len(db2) == 1
-    assert db2.get_by_id("a") is not None
-    assert db2.get_by_id("b") is None
+    assert db2.get("a") is not None
+    assert db2.get("b") is None

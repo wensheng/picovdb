@@ -39,7 +39,7 @@ def test_upsert_into_preallocated(tmp_path):
     assert db.capacity() == capacity
     assert len(db._free) == capacity - 5
 
-    retrieved = db.get_by_id("3", include_vector=True)
+    retrieved = db.get("3", include_vector=True)
     assert retrieved is not None
     # The vector is normalized
     norm_vec = np.array([3.0, 3.0], dtype=Float)

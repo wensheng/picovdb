@@ -67,11 +67,11 @@ def test_vacuum(tmp_path):
     assert results[0][K_ID] == "c"
 
     # Verify that the data is still correct
-    item_a = db.get_by_id("a", include_vector=True)
-    item_c = db.get_by_id("c", include_vector=True)
+    item_a = db.get("a", include_vector=True)
+    item_c = db.get("c", include_vector=True)
     assert item_a is not None
     assert item_c is not None
     np.testing.assert_allclose(item_a[K_VECTOR], np.array([1.0, 0.0]), rtol=1e-6)
     
     # Item b should be gone
-    assert db.get_by_id("b") is None
+    assert db.get("b") is None

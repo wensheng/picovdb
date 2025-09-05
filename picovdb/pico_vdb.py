@@ -784,41 +784,54 @@ class PicoVectorDB:
         with self._rwlock.read_lock():
             return len(self._id2idx)
 
-    def get(self, ids: list[str], include_vector: bool = False) -> list[dict[str, Any]]:
+    def get(
+        self, ids: Union[str, list[str]], include_vector: bool = False
+    ) -> Union[Optional[dict[str, Any]], list[dict[str, Any]]]:
         """
-        Get records by IDs.
+        Get records by ID or IDs.
 
-        Returns metadata by default; when `include_vector=True`, also include `_vector_`.
+        - If `ids` is a `str`, returns a single record dict or `None`.
+        - If `ids` is a list of strings, returns a list of found records (missing IDs are skipped).
+        - Returns metadata by default; when `include_vector=True`, also include `_vector_`.
         """
         with self._rwlock.read_lock():
-            out = []
-            for _id in ids:
-                idx = self._id2idx.get(_id)
-                if idx is not None:
-                    meta = self._docs[idx] or {K_ID: _id}
-                    rec = dict(meta)
-                    if include_vector:
-                        rec[K_VECTOR] = self._vectors[idx].copy()
-                    out.append(rec)
-            return out
+            if isinstance(ids, str):
+                idx = self._id2idx.get(ids)
+                if idx is None:
+                    return None
+                meta = self._docs[idx] or {K_ID: ids}
+                rec = dict(meta)
+                if include_vector:
+                    rec[K_VECTOR] = self._vectors[idx].copy()
+                return rec
+            else:
+                out: list[dict[str, Any]] = []
+                for _id in ids:
+                    idx = self._id2idx.get(_id)
+                    if idx is not None:
+                        meta = self._docs[idx] or {K_ID: _id}
+                        rec = dict(meta)
+                        if include_vector:
+                            rec[K_VECTOR] = self._vectors[idx].copy()
+                        out.append(rec)
+                return out
 
     def get_by_id(
         self, sid: str, include_vector: bool = False
     ) -> Optional[dict[str, Any]]:
         """
-        Get a single record by ID.
+        Deprecated: use `get(sid)` instead.
 
         Returns metadata by default; when `include_vector=True`, also include `_vector_`.
         """
-        with self._rwlock.read_lock():
-            idx = self._id2idx.get(sid)
-            if idx is not None:
-                meta = self._docs[idx] or {K_ID: sid}
-                rec = dict(meta)
-                if include_vector:
-                    rec[K_VECTOR] = self._vectors[idx].copy()
-                return rec
-            return None
+        warnings.warn(
+            "get_by_id() is deprecated: use get(id) or get([ids])",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # Delegate to unified getter
+        res = self.get(sid, include_vector=include_vector)
+        return res  # type: ignore[return-value]
 
     def get_all(
         self, include_vector: bool = False, include_deleted: bool = False

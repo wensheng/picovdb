@@ -30,9 +30,9 @@ def test_get_by_id_and_get_all_include_vector(tmp_path):
     e1 = np.array([0, 1, 0], dtype=np.float32)
     db.upsert([{K_VECTOR: e0, K_ID: "0"}, {K_VECTOR: e1, K_ID: "1"}])
 
-    r0 = db.get_by_id("0")
+    r0 = db.get("0")
     assert r0 is not None and K_VECTOR not in r0
-    r0v = db.get_by_id("0", include_vector=True)
+    r0v = db.get("0", include_vector=True)
     assert K_VECTOR in r0v and np.allclose(r0v[K_VECTOR], e0)
 
     all_meta = db.get_all()
