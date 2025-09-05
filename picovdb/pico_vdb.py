@@ -115,7 +115,12 @@ class PicoVectorDB:
         capacity: Optional[int] = None,
         no_faiss: bool = False,
         faiss_threads: Optional[int] = None,
+        # FAISS HNSW tunables
+        hnsw_m: Optional[int] = None,
+        hnsw_ef_construction: Optional[int] = None,
+        # Back-compat name kept; prefer `hnsw_ef_search_default` if both provided
         ef_search_default: Optional[int] = None,
+        hnsw_ef_search_default: Optional[int] = None,
     ) -> None:
         # Initialize RWLock for thread safety
         self._lock = RLock()
@@ -136,11 +141,21 @@ class PicoVectorDB:
         # Active (non-deleted) row indices for fast filtering
         self._active_indices: np.ndarray = np.empty(0, dtype=np.int64)
 
+        # HNSW params (store resolved values)
+        self._hnsw_m: int = int(hnsw_m) if hnsw_m is not None else HNSW_M
+        self._hnsw_efc: int = (
+            int(hnsw_ef_construction)
+            if hnsw_ef_construction is not None
+            else HNSW_EFC
+        )
+
         # faiss index ---------------------------------------------------------
         # self._faiss = faiss.IndexFlatIP(self.dim) if _HAS_FAISS else None
         if _HAS_FAISS and not no_faiss:
-            base = faiss.IndexHNSWFlat(self.dim, HNSW_M, faiss.METRIC_INNER_PRODUCT)
-            base.hnsw.efConstruction = HNSW_EFC
+            base = faiss.IndexHNSWFlat(
+                self.dim, self._hnsw_m, faiss.METRIC_INNER_PRODUCT
+            )
+            base.hnsw.efConstruction = self._hnsw_efc
             self._faiss = faiss.IndexIDMap2(base)
             # optionally set FAISS threads
             if faiss_threads is not None and hasattr(faiss, "omp_set_num_threads"):
@@ -153,9 +168,13 @@ class PicoVectorDB:
         # dirty flag for lazy FAISS rebuilds
         self._dirty: bool = False
         # default efSearch for FAISS HNSW
-        self._faiss_ef_search: int = (
-            int(ef_search_default) if ef_search_default is not None else HNSW_EFS
-        )
+        # prefer new kwarg if provided, otherwise fall back to legacy name
+        if hnsw_ef_search_default is not None:
+            self._faiss_ef_search = int(hnsw_ef_search_default)
+        elif ef_search_default is not None:
+            self._faiss_ef_search = int(ef_search_default)
+        else:
+            self._faiss_ef_search = HNSW_EFS
 
         self._load_or_init()
 
@@ -464,7 +483,9 @@ class PicoVectorDB:
         better_than: Optional[float] = None,
         where: Optional[Callable[[dict[str, Any]], bool]] = None,
         ids: Optional[list[str]] = None,
+        # Back-compat: `ef_search`; new alias `hnsw_ef_search`
         ef_search: Optional[int] = None,
+        hnsw_ef_search: Optional[int] = None,
     ) -> Union[list[list[dict[str, Any]]], list[dict[str, Any]]]:
         """Query the database.
 
@@ -594,12 +615,13 @@ class PicoVectorDB:
             # Perform FAISS search and build results under read lock
             with self._rwlock.read_lock():
                 try:
-                    # prefer per-call ef_search, fall back to default
-                    ef = (
-                        int(ef_search)
-                        if ef_search is not None
-                        else self._faiss_ef_search
-                    )
+                    # prefer per-call hnsw_ef_search, fall back to legacy `ef_search`, then default
+                    if hnsw_ef_search is not None:
+                        ef = int(hnsw_ef_search)
+                    elif ef_search is not None:
+                        ef = int(ef_search)
+                    else:
+                        ef = self._faiss_ef_search
                     self._faiss.index.hnsw.efSearch = ef  # type: ignore[attr-defined]
                 except Exception:
                     pass
@@ -657,6 +679,7 @@ class PicoVectorDB:
         where: Optional[Callable[[dict[str, Any]], bool]] = None,
         ids: Optional[list[str]] = None,
         ef_search: Optional[int] = None,
+        hnsw_ef_search: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         """Convenience method for single-vector queries."""
         return self.query(  # type: ignore[return-value]
@@ -666,6 +689,7 @@ class PicoVectorDB:
             where=where,
             ids=ids,
             ef_search=ef_search,
+            hnsw_ef_search=hnsw_ef_search,
         )
 
     def stats(self) -> dict[str, Any]:
@@ -749,7 +773,11 @@ class PicoVectorDB:
                 ids = active_idx.astype(np.int64)
                 # ensure inner HNSW search params are set
                 if hasattr(self._faiss, "index") and hasattr(self._faiss.index, "hnsw"):
-                    self._faiss.index.hnsw.efConstruction = HNSW_EFC
+                    # set construction depth on inner HNSW before rebuilding
+                    try:
+                        self._faiss.index.hnsw.efConstruction = self._hnsw_efc
+                    except Exception:
+                        pass
                 self._faiss.add_with_ids(vecs, ids)
 
     def __len__(self) -> int:
