@@ -2,9 +2,9 @@
 Demonstrates text chunking, Huggingface embedding with sentence-transformer, and storage in a PicoVectorDB for similarity queries.
 """
 
-from sentence_transformers import SentenceTransformer
 import set_path
 from picovdb import PicoVectorDB
+from sentence_transformers import SentenceTransformer
 
 CHUNK_SIZE = 256
 model_name = "all-MiniLM-L6-v2"

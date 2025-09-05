@@ -5,7 +5,7 @@ An extremely fast, ultra-lightweight local vector database in Python.
 
 **"extremely fast"**: sub-millisecond query
 
-**"ultra-lighweight"**: One file with only Numpy and one optional dependency [faiss-cpu](https://pypi.org/project/faiss-cpu/).
+**"ultra-lighweight"**: One file with only Numpy and one optional dependency [faiss-cpu](https://pypi.org/project/faiss-cpu/). (See faiss note at the end)
 
 ## Install
 
@@ -19,8 +19,8 @@ pip install picovdb
 
 (Use SentenceTransformer embedding as example)
 ```python
+from picovdb import PicoVectorDB  # On Mac, import before any libs that use pytorch
 from sentence_transformers import SentenceTransformer
-from picovdb import PicoVectorDB
 
 CHUNK_SIZE = 256
 model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -46,6 +46,12 @@ with open('A_Christmas_Carol.txt', encoding='UTF8') as f:
 
 **Query**
 ```python
+from picovdb import PicoVectorDB
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer('all-MiniLM-L6-v2')
+dim = model.get_sentence_embedding_dimension()
+
 db = PicoVectorDB(embedding_dim=dim, storage_file='_acc')
 txt = "Are there no prisons? Are there no workhouses?"
 emb = model.encode(txt)
@@ -82,3 +88,14 @@ Environment: Windows PC with CPU Core i7-12700k and old-gen M2 Nvme SSD
    - Doing 100 queries from `100,000` vectors took `0.04`s (`0.0004`s or `0.4 millisecond` per quiry).
    - Doing 1000 queries from `100,000` vectors in batch mode took `0.16`s (`0.00016`s or `0.16 millisecond` per quiry).
 
+## FAISS Note
+
+On MacOS, if you use FAISS, please do one of following:
+
+- import `picovdb` before any libraries that use `pytorch` (e.g. `sentence_transformers`, `transformers`, etc) or any packages that use OpenMP.
+- set faiss_threads to 1 when initializing PicoVectorDB, e.g. `PicoVectorDB(..., faiss_threads=1)`.
+- set env var `PICOVDB_FAISS_THREADS=1` before running your script.
+
+Faiss >=1.10 will segfault on Darwin when using HNSW index with OpenMP multithreading. This is a known issue with FAISS on macOS.
+
+On Windows and Linux, Faiss works fine with other libs that use OpenMP, no special care is needed.

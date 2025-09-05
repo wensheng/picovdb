@@ -6,7 +6,6 @@ import os
 import json
 import hashlib
 import logging
-import platform
 import warnings
 import time
 from typing import Any, Callable, Literal, Optional, Union
@@ -24,7 +23,6 @@ except ImportError:  # pragma: no cover
     _HAS_FAISS = False
 
 
-_IS_DARWIN = platform.system() == "Darwin"
 Float = np.float32
 HNSW_M = 32  # number of connections each vertex will have
 HNSW_EFC = 40  # depth of layers explored during index construction
@@ -185,8 +183,6 @@ class PicoVectorDB:
                     thr = int(faiss_threads)
                 elif env_thr is not None:
                     thr = int(env_thr)
-                elif _IS_DARWIN:
-                    thr = 1  # mitigate segfaults observed with FAISS>=1.10 on macOS
                 else:
                     thr = None
                 if thr is not None and hasattr(faiss, "omp_set_num_threads"):
@@ -1065,3 +1061,4 @@ class _RWLock:
         with self._cond:
             self._writer = False
             self._cond.notify_all()
+
