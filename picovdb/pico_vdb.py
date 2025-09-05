@@ -6,6 +6,7 @@ import os
 import json
 import hashlib
 import logging
+import platform
 import warnings
 import time
 from typing import Any, Callable, Literal, Optional, Union
@@ -18,15 +19,12 @@ import numpy as np
 # optional FAISS --------------------------------------------------------------
 try:
     import faiss  # type: ignore
-
-    # import platform
-    # if platform.system() == "Darwin":
-    #     faiss.omp_set_num_threads(1)  # without this it crashes when 1.10.0, 1.11.0.  1.9.0 is OK.
     _HAS_FAISS = True
 except ImportError:  # pragma: no cover
     _HAS_FAISS = False
 
 
+_IS_DARWIN = platform.system() == "Darwin"
 Float = np.float32
 HNSW_M = 32  # number of connections each vertex will have
 HNSW_EFC = 40  # depth of layers explored during index construction
@@ -178,12 +176,23 @@ class PicoVectorDB:
             )
             base.hnsw.efConstruction = self._hnsw_efc
             self._faiss = faiss.IndexIDMap2(base)
-            # optionally set FAISS threads
-            if faiss_threads is not None and hasattr(faiss, "omp_set_num_threads"):
-                try:
-                    faiss.omp_set_num_threads(int(faiss_threads))  # type: ignore[attr-defined]
-                except Exception:
-                    pass
+            # optionally set FAISS threads (env/arg override, with macOS-safe default)
+            try:
+                # precedence: explicit arg -> env -> Darwin default(1) -> none
+                env_thr = os.getenv("PICOVDB_FAISS_THREADS")
+                thr: Optional[int]
+                if faiss_threads is not None:
+                    thr = int(faiss_threads)
+                elif env_thr is not None:
+                    thr = int(env_thr)
+                elif _IS_DARWIN:
+                    thr = 1  # mitigate segfaults observed with FAISS>=1.10 on macOS
+                else:
+                    thr = None
+                if thr is not None and hasattr(faiss, "omp_set_num_threads"):
+                    faiss.omp_set_num_threads(thr)  # type: ignore[attr-defined]
+            except Exception:
+                pass
         else:
             self._faiss = None
         # dirty flag for lazy FAISS rebuilds

@@ -7,15 +7,18 @@ import set_path
 from picovdb import PicoVectorDB
 
 CHUNK_SIZE = 256
+model_name = 'all-MiniLM-L6-v2'
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
-print("model embedding dimensions:", model.get_sentence_embedding_dimension())
+print(f"Loading st model: {model_name} ...")
+model = SentenceTransformer(model_name)
+dim: int = model.get_sentence_embedding_dimension() or 384
+print("model embedding dimensions:", dim)
 
 with open("A_Christmas_Carol.txt", encoding="UTF8") as f:
     content = f.read()
     num_chunks = len(content) // CHUNK_SIZE + 1
     chunks = [content[i * CHUNK_SIZE : (i + 1) * CHUNK_SIZE] for i in range(num_chunks)]
-    embeddings = model.encode(chunks)
+    embeddings = model.encode(chunks, show_progress_bar=True)
     data = [
         {
             "_vector_": embeddings[i],
@@ -24,10 +27,7 @@ with open("A_Christmas_Carol.txt", encoding="UTF8") as f:
         }
         for i in range(num_chunks)
     ]
-    db = PicoVectorDB(
-        embedding_dim=model.get_sentence_embedding_dimension(),
-        storage_file="_acc",
-    )
+    db = PicoVectorDB(embedding_dim=dim, storage_file="_acc")
     db.upsert(data)
     db.save()
 
