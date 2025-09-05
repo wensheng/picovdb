@@ -123,6 +123,9 @@ class PicoVectorDB:
         hnsw_ef_search_default: Optional[int] = None,
         # Threshold ratio deciding incremental vs full rebuild (changes/ntotal)
         faiss_incremental_threshold_ratio: float = 0.2,
+        # NumPy top-k tuning knobs
+        adaptive_buffer: Optional[int] = None,
+        argsort_threshold: Optional[float] = None,
     ) -> None:
         # Initialize RWLock for thread safety
         self._lock = RLock()
@@ -150,6 +153,22 @@ class PicoVectorDB:
             if hnsw_ef_construction is not None
             else HNSW_EFC
         )
+        # NumPy tuning knobs with env fallbacks
+        ab_env = os.getenv("PICOVDB_ADAPTIVE_BUFFER")
+        thr_env = os.getenv("PICOVDB_ARGSORT_THRESHOLD")
+        self._adaptive_buffer: int = (
+            int(adaptive_buffer)
+            if adaptive_buffer is not None
+            else (int(ab_env) if ab_env is not None else ADAPTIVE_BUFFER)
+        )
+        self._argsort_threshold: float = (
+            float(argsort_threshold)
+            if argsort_threshold is not None
+            else (float(thr_env) if thr_env is not None else 0.2)
+        )
+        # Debug/testing hooks
+        self._last_topk_strategy: Optional[str] = None
+        self._last_k_eff: Optional[int] = None
 
         # faiss index ---------------------------------------------------------
         # self._faiss = faiss.IndexFlatIP(self.dim) if _HAS_FAISS else None
@@ -529,6 +548,12 @@ class PicoVectorDB:
         For the NumPy path, snapshots read-only references under the read lock and releases
         the lock before heavy math to improve concurrency. For the FAISS path, keeps the
         read lock held to avoid concurrent mutation of the index during search.
+
+        Performance note:
+        - The `where` filter is evaluated in Python over candidate documents. On large datasets this
+          can be a bottleneck. For best performance, pre-filter candidates using the `ids` parameter
+          when possible. Simple dict patterns like `{key: value}` or `{key: {"$in": [...]}}` are
+          recognized and prefiltered efficiently, but arbitrary callables still incur Python-loop cost.
         """
         # Prepare and validate input first (no lock needed)
         raw = np.ascontiguousarray(query_vecs, dtype=Float)
@@ -659,17 +684,19 @@ class PicoVectorDB:
                 scores_act = vecs @ vectors_cand.T  # (num_q, |candidates|)
             # If filters are present, fetch extra candidates to mitigate underfill after filtering
             base = (
-                top_k + ADAPTIVE_BUFFER
+                top_k + self._adaptive_buffer
                 if (ids is not None or where is not None)
                 else top_k
             )
             k_eff = min(base, scores_act.shape[1])
+            self._last_k_eff = int(k_eff)
             # Heuristic: prefer full argsort when k_eff is a large fraction of candidates
             frac = k_eff / scores_act.shape[1] if scores_act.shape[1] > 0 else 0.0
-            if frac > 0.2:
+            if frac > self._argsort_threshold:
                 order_full = np.argsort(-scores_act, axis=1)[:, :k_eff]
                 idxs_batch_local = order_full
                 scores_batch = np.take_along_axis(scores_act, idxs_batch_local, axis=1)
+                self._last_topk_strategy = "argsort"
             else:
                 idxs_part_local = np.argpartition(scores_act, -k_eff, axis=1)[
                     :, -k_eff:
@@ -678,6 +705,7 @@ class PicoVectorDB:
                 order = np.argsort(-scores_part, axis=1)
                 idxs_batch_local = np.take_along_axis(idxs_part_local, order, axis=1)
                 scores_batch = np.take_along_axis(scores_part, order, axis=1)
+                self._last_topk_strategy = "argpartition"
             idxs_batch = candidate_ref[idxs_batch_local]
 
         if faiss_ok:
