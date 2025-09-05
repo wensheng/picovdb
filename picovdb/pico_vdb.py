@@ -121,6 +121,8 @@ class PicoVectorDB:
         # Back-compat name kept; prefer `hnsw_ef_search_default` if both provided
         ef_search_default: Optional[int] = None,
         hnsw_ef_search_default: Optional[int] = None,
+        # Threshold ratio deciding incremental vs full rebuild (changes/ntotal)
+        faiss_incremental_threshold_ratio: float = 0.2,
     ) -> None:
         # Initialize RWLock for thread safety
         self._lock = RLock()
@@ -167,6 +169,15 @@ class PicoVectorDB:
             self._faiss = None
         # dirty flag for lazy FAISS rebuilds
         self._dirty: bool = False
+        # Track pending FAISS incremental updates
+        self._faiss_pending_add: set[int] = set()
+        self._faiss_pending_remove: set[int] = set()
+        # Threshold for incremental vs full rebuild
+        self._faiss_incr_threshold_ratio: float = float(
+            faiss_incremental_threshold_ratio
+        )
+        # Debug/testing: record last rebuild mode ("incremental"|"full")
+        self._last_faiss_rebuild_mode: Optional[str] = None
         # default efSearch for FAISS HNSW
         # prefer new kwarg if provided, otherwise fall back to legacy name
         if hnsw_ef_search_default is not None:
@@ -436,6 +447,29 @@ class PicoVectorDB:
                 else:
                     self._active_indices = np.asarray(new_active, dtype=np.int64)
             if self._faiss is not None:
+                # Track incremental changes: updates and inserts
+                for item in items:
+                    item_id = item.get(K_ID)
+                    if item_id is None:
+                        continue
+                    idx = self._id2idx.get(item_id)
+                    if idx is None:
+                        continue
+                    # For existing id updates, ensure remove then add
+                    # We cannot distinguish here between update vs insert easily; treat all as add
+                    # and if the id existed before, also mark remove.
+                    # A safe approach: if item_id was in report["update"], mark remove+add; else add only.
+                
+                for sid in report["update"]:
+                    idx = self._id2idx.get(sid)
+                    if idx is not None:
+                        self._faiss_pending_remove.add(int(idx))
+                        self._faiss_pending_add.add(int(idx))
+                for sid in report["insert"]:
+                    idx = self._id2idx.get(sid)
+                    if idx is not None:
+                        self._faiss_pending_add.add(int(idx))
+                # Mark dirty so a lazy rebuild (incremental or full) occurs on next FAISS use
                 self._dirty = True
             return report
 
@@ -472,6 +506,9 @@ class PicoVectorDB:
                 mask = ~np.isin(self._active_indices, to_remove)
                 self._active_indices = self._active_indices[mask]
             if removed and self._faiss is not None:
+                # Track removed indices for incremental FAISS update
+                for idx in removed_idxs:
+                    self._faiss_pending_remove.add(int(idx))
                 self._dirty = True
             return removed
 
@@ -797,21 +834,58 @@ class PicoVectorDB:
     def _rebuild_faiss(self) -> None:
         if self._faiss is None:
             return
-        # Reset and add only active vectors with global row indices as FAISS IDs
+        # If possible, apply incremental updates instead of full reset
+        try:
+            ntotal = getattr(self._faiss, "ntotal", 0)
+        except Exception:
+            ntotal = 0
+
+        # Configure construction parameter when we will add vectors
+        def _ensure_hnsw_build_params():
+            try:
+                if hasattr(self._faiss, "index") and hasattr(self._faiss.index, "hnsw"):
+                    self._faiss.index.hnsw.efConstruction = self._hnsw_efc
+            except Exception:
+                pass
+
+        if ntotal > 0 and (self._faiss_pending_add or self._faiss_pending_remove):
+            # Apply removals
+            # Decide incremental vs full by change ratio
+            changed_ids = set(self._faiss_pending_add) | set(self._faiss_pending_remove)
+            change_ratio = (len(changed_ids) / float(ntotal)) if ntotal > 0 else 1.0
+            if change_ratio <= max(0.0, self._faiss_incr_threshold_ratio):
+                # Incremental path
+                if self._faiss_pending_remove:
+                    try:
+                        rem = np.asarray(sorted(self._faiss_pending_remove), dtype=np.int64)
+                        self._faiss.remove_ids(rem)
+                    except Exception:
+                        # Fallback to full rebuild if removal not supported
+                        self._faiss.reset()
+                        ntotal = 0
+                if ntotal > 0 and self._faiss_pending_add:
+                    _ensure_hnsw_build_params()
+                    add_ids = np.asarray(sorted(self._faiss_pending_add), dtype=np.int64)
+                    self._faiss.add_with_ids(self._vectors[add_ids], add_ids)
+                self._faiss_pending_add.clear()
+                self._faiss_pending_remove.clear()
+                self._last_faiss_rebuild_mode = "incremental"
+                return
+            # else fall through to full rebuild
+
+        # Full rebuild path
         self._faiss.reset()
         if self._vectors.size:
             active_idx = self._active_indices
             if active_idx.size:
                 vecs = self._vectors[active_idx]
                 ids = active_idx.astype(np.int64)
-                # ensure inner HNSW search params are set
-                if hasattr(self._faiss, "index") and hasattr(self._faiss.index, "hnsw"):
-                    # set construction depth on inner HNSW before rebuilding
-                    try:
-                        self._faiss.index.hnsw.efConstruction = self._hnsw_efc
-                    except Exception:
-                        pass
+                _ensure_hnsw_build_params()
                 self._faiss.add_with_ids(vecs, ids)
+        # Clear pending sets since we've rebuilt fully
+        self._faiss_pending_add.clear()
+        self._faiss_pending_remove.clear()
+        self._last_faiss_rebuild_mode = "full"
 
     def __len__(self) -> int:
         with self._rwlock.read_lock():
