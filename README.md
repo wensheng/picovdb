@@ -61,11 +61,12 @@ Hardware: M3 MacBook Air
 
 1. Pure Python:
    - Inserting `100,000` vectors took about `0.5`s
-   - Doing 100 queries from `100,000` vectors took roughly `0.6`s (`0.006`s per quiry).
+   - Doing 100 queries from `100,000` vectors took roughly `0.8`s (`0.008`s per quiry).
+   - Doing 1000 queries from `100,000` vectors in batch mode took `1.0`s (`0.001`s or `1 millisecond` per quiry).
 
 2. With FAISS(cpu):
    - Inserting `100,000` vectors took `110`s
-   - Doing 100 queries from `100,000` vectors took `0.05`s (`0.0005`s or `0.5 millisecond` per quiry).
+   - Doing 100 queries from `100,000` vectors took `0.04`s (`0.0004`s or `0.4 millisecond` per quiry).
    - Doing 1000 queries from `100,000` vectors in batch mode took `0.1`s (`0.0001`s or `0.1 millisecond` per quiry).
 
 Hardware: PC with CPU Core i7-12700k and old-gen M2 Nvme SSD
