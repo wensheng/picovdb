@@ -481,7 +481,7 @@ class PicoVectorDB:
         query_vecs: np.ndarray,
         top_k: int = 10,
         better_than: Optional[float] = None,
-        where: Optional[Callable[[dict[str, Any]], bool]] = None,
+        where: Optional[Union[dict[str, Any], Callable[[dict[str, Any]], bool]]] = None,
         ids: Optional[list[str]] = None,
         # Back-compat: `ef_search`; new alias `hnsw_ef_search`
         ef_search: Optional[int] = None,
@@ -544,17 +544,49 @@ class PicoVectorDB:
                 else:
                     candidate_idx = np.empty(0, dtype=np.int64)
             if where is not None:
-                mask = [
-                    where(docs_view[i]) if docs_view[i] is not None else False
-                    for i in active_idx_view
-                ]
-                filtered = active_idx_view[np.asarray(mask, dtype=bool)]
-                if candidate_idx is None:
-                    candidate_idx = filtered
+                # Pattern-aware prefilter: dict forms for eq / $in
+                def _eval_where_simple(idx_arr: np.ndarray) -> np.ndarray:
+                    # Return subset of idx_arr satisfying simple dict where; if unsupported, return sentinel -1
+                    # Supported: {key: value} (equality), {key: {"$in": [..]}}
+                    nonlocal where
+                    if isinstance(where, dict) and len(where) == 1:
+                        (k, v), = where.items()  # type: ignore[misc]
+                        if isinstance(v, dict) and set(v.keys()) == {"$in"}:
+                            values = set(v["$in"])  # type: ignore[index]
+                            sel = [
+                                i
+                                for i in idx_arr
+                                if (docs_view[i] is not None and docs_view[i].get(k) in values)
+                            ]
+                            return np.asarray(sel, dtype=np.int64)
+                        else:
+                            # treat as equality or truthy compare
+                            sel = [
+                                i
+                                for i in idx_arr
+                                if (docs_view[i] is not None and docs_view[i].get(k) == v)
+                            ]
+                            return np.asarray(sel, dtype=np.int64)
+                    # unsupported -> use generic callable path if provided
+                    return np.asarray([-1], dtype=np.int64)
+
+                base_idx = candidate_idx if candidate_idx is not None else active_idx_view
+                filtered = _eval_where_simple(base_idx)
+                if filtered.size == 1 and filtered[0] == -1:
+                    # Fallback to generic callable where
+                    mask = [
+                        where(docs_view[i]) if docs_view[i] is not None else False  # type: ignore[misc]
+                        for i in active_idx_view
+                    ]
+                    filtered_full = active_idx_view[np.asarray(mask, dtype=bool)]
+                    if candidate_idx is None:
+                        candidate_idx = filtered_full
+                    else:
+                        candidate_idx = np.intersect1d(
+                            candidate_idx, filtered_full, assume_unique=False
+                        )
                 else:
-                    candidate_idx = np.intersect1d(
-                        candidate_idx, filtered, assume_unique=False
-                    )
+                    candidate_idx = filtered
             if candidate_idx is None:
                 candidate_idx = active_idx_view
 
@@ -650,6 +682,7 @@ class PicoVectorDB:
         else:
             # Build results without lock using snapshots (NumPy path)
             results_batch: list[list[dict[str, Any]]] = []
+            where_callable = callable(where)
             for qi in range(num_q):
                 idxs = idxs_batch[qi]
                 scores = scores_batch[qi]
@@ -663,7 +696,7 @@ class PicoVectorDB:
                     if better_than is not None and score < better_than:
                         continue
                     meta = doc
-                    if where and not where(meta):
+                    if where_callable and not where(meta):  # type: ignore[misc]
                         continue
                     results.append({**meta, K_METRICS: float(score)})
                     if len(results) == top_k:
